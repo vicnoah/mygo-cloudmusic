@@ -1,5 +1,5 @@
 # Pushing a tag such as v0.2.0 builds the apps of macOS, Windows and
-# Linux, signs them and their updates, and uploads them to a draft
+# Linux, signs updates (and macOS where configured), and uploads them to a draft
 # release of the tag, which is published by hand: installed apps update
 # to it then.
 name: Release

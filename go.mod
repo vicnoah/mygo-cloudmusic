@@ -13,6 +13,9 @@ require (
 	rsc.io/qr v0.2.0
 )
 
+// Use the installer-location fix until it is available in upstream MyGo.
+replace github.com/egoist/mygo => github.com/vicnoah/mygo v0.7.2-0.20261027041249-3dbcbc3ffb28
+
 require (
 	github.com/go-text/typesetting v0.3.5 // indirect
 	github.com/icza/bitio v1.1.0 // indirect

@@ -1,5 +1,8 @@
 # Releasing
 
+This fork publishes releases at `vicnoah/mygo-cloudmusic`. Windows builds are
+unsigned; the update manifests are still signed by MyGo's updater key.
+
 1. Commit pending work, bring main up to date with origin, and run `go test ./internal/...`. Others push to main too, so a release cut from a stale main leaves out their work:
 
    ```bash
@@ -39,7 +42,7 @@
 6. Check the update feed shows the new version:
 
    ```bash
-   curl -sL https://github.com/egoist/mygo-cloudmusic/releases/latest/download/update-darwin-arm64.json
+   curl -sL https://github.com/vicnoah/mygo-cloudmusic/releases/latest/download/update-darwin-arm64.json
    ```
 
 7. Deploy the website. It reads the latest release when it's prerendered, so it has to be rebuilt after publishing:
