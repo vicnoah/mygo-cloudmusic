@@ -125,39 +125,41 @@ func (a *app) settingsView(c *ui.Context) {
 			})
 		}
 
-		group("播放", func() {
-			row("音质", "仅网易云音乐：无损与 Hi-Res 需要黑胶 VIP，没有时播放所能播放的最高音质；下一首歌曲开始生效", func() {
-				labels := make([]string, len(qualityLevels))
-				chosen := qualityLevels[2].label
-				for i, q := range qualityLevels {
-					labels[i] = q.label
-					if q.level == s.Quality {
-						chosen = q.label
-					}
-				}
-				if ui.Select(c.Key("quality"), &chosen, labels).Label("音质").Width(150).Changed() {
-					for _, q := range qualityLevels {
-						if q.label == chosen {
-							s.Quality = q.level
+		if !a.onFn() {
+			group("播放", func() {
+				row("音质", "仅网易云音乐：无损与 Hi-Res 需要黑胶 VIP，没有时播放所能播放的最高音质；下一首歌曲开始生效", func() {
+					labels := make([]string, len(qualityLevels))
+					chosen := qualityLevels[2].label
+					for i, q := range qualityLevels {
+						labels[i] = q.label
+						if q.level == s.Quality {
+							chosen = q.label
 						}
 					}
-					a.changed()
-				}
+					if ui.Select(c.Key("quality"), &chosen, labels).Label("音质").Width(150).Changed() {
+						for _, q := range qualityLevels {
+							if q.label == chosen {
+								s.Quality = q.level
+							}
+						}
+						a.changed()
+					}
+				})
+				row("间奏时显示热评", "前奏、间奏与尾奏时，歌词处换成这首歌的热门评论", func() {
+					if ui.Switch(c.Key("hot-comments"), &s.HotComments).Label("间奏时显示热评").Changed() {
+						a.changed()
+					}
+				})
+				row("音量均衡", "按网易云音乐测得的响度调整每首歌的音量，让歌曲听起来一样响", func() {
+					if ui.Switch(c.Key("normalize"), &s.Normalize).Label("音量均衡").Changed() {
+						a.pl.SetVolume(a.volume)
+						a.changed()
+					}
+				})
 			})
-			row("间奏时显示热评", "前奏、间奏与尾奏时，歌词处换成这首歌的热门评论", func() {
-				if ui.Switch(c.Key("hot-comments"), &s.HotComments).Label("间奏时显示热评").Changed() {
-					a.changed()
-				}
-			})
-			row("音量均衡", "按网易云音乐测得的响度调整每首歌的音量，让歌曲听起来一样响", func() {
-				if ui.Switch(c.Key("normalize"), &s.Normalize).Label("音量均衡").Changed() {
-					a.pl.SetVolume(a.volume)
-					a.changed()
-				}
-			})
-		})
+		}
 
-		if a.fn.client != nil {
+		if a.onFn() && a.fn.client != nil {
 			group("飞牛音乐", func() {
 				row("转码策略", "自动模式只转换播放器不支持的格式；仅播放原始格式时，M4A、AAC、APE 等格式无法播放", func() {
 					mode := s.FnTranscodeMode
@@ -195,7 +197,7 @@ func (a *app) settingsView(c *ui.Context) {
 			})
 		}
 
-		if a.captionsShown() {
+		if !a.onFn() && a.captionsShown() {
 			group("播客", func() { a.captionSettings(row, c) })
 		}
 
