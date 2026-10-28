@@ -167,6 +167,57 @@ func TestListContinues(t *testing.T) {
 	}
 }
 
+// A list starts refilling with ten tracks left, rather than waiting for the
+// queue to get down to the last two tracks.
+func TestListRefillsWithTenTracksLeft(t *testing.T) {
+	p := &Player{at: -1}
+	tracks := make([]netease.Track, 20)
+	for i := range tracks {
+		tracks[i].ID = int64(i + 1)
+	}
+	p.Cue(tracks)
+	asked := 0
+	p.feed = func(got func([]netease.Track)) {
+		asked++
+		got(nil)
+	}
+
+	p.at = 9 // 11 tracks remain, so the threshold has not been reached.
+	p.refill()
+	if asked != 0 {
+		t.Fatalf("asked with %d tracks left", len(p.order)-p.at)
+	}
+	p.at = 10 // 10 tracks remain, so the next page should be requested.
+	p.refill()
+	if asked != 1 {
+		t.Fatalf("asked %d times with ten tracks left", asked)
+	}
+}
+
+// A view can request the next list page before playback reaches the refill
+// threshold, and a second request waits until the first one completes.
+func TestPrefetchRequestsListPage(t *testing.T) {
+	p := &Player{at: -1}
+	p.Cue([]netease.Track{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}})
+	asked := 0
+	var finish func([]netease.Track)
+	p.feed = func(got func([]netease.Track)) {
+		asked++
+		finish = got
+	}
+
+	p.Prefetch()
+	p.Prefetch()
+	if asked != 1 {
+		t.Fatalf("asked %d times while the first request was pending", asked)
+	}
+	finish([]netease.Track{{ID: 5}})
+	p.Prefetch()
+	if asked != 2 {
+		t.Fatalf("asked %d times after the first request completed", asked)
+	}
+}
+
 func TestNormGain(t *testing.T) {
 	for _, c := range []struct {
 		st   *netease.Stream
@@ -236,6 +287,9 @@ func TestEndRadio(t *testing.T) {
 	p.at, p.track = 1, &p.queue[1]
 	asked := 0
 	p.AttachRadio("heart", func(got func([]netease.Track)) { asked++ })
+	// The larger refill window may ask once while attaching the radio; the
+	// assertion below is about requests after the radio has been left.
+	asked = 0
 	p.EndRadio()
 	if p.Radio() != "" || p.Current().ID != 2 {
 		t.Fatalf("radio %q, current %v", p.Radio(), p.Current())

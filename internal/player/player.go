@@ -23,6 +23,11 @@ const (
 	RepeatOne
 )
 
+// refillAhead starts the next list request before the current queue runs out.
+// Keeping several tracks ready also gives the queue and cover-wall views time
+// to grow while a list is being played or explored.
+const refillAhead = 10
+
 // Player plays a queue of tracks. Its methods run on the main thread;
 // loading happens on goroutines, whose results post brings back there.
 type Player struct {
@@ -304,9 +309,23 @@ func (p *Player) endRadio() {
 // Radio returns the name of the radio playing, or "".
 func (p *Player) Radio() string { return p.radio }
 
-// refill asks the radio for more once the queue is near its end.
+// refill asks the attached source for more once the queue is near its end.
 func (p *Player) refill() {
-	if p.feed == nil || p.feeding || p.at < len(p.order)-2 {
+	if p.feed == nil || p.feeding || p.at < len(p.order)-refillAhead {
+		return
+	}
+	p.refillNow()
+}
+
+// Prefetch asks a list-backed player for another batch without waiting for
+// playback to reach its end. Views use it when the listener scrolls near the
+// end of the queue; a normal playback refill still applies refillAhead.
+func (p *Player) Prefetch() {
+	p.refillNow()
+}
+
+func (p *Player) refillNow() {
+	if p.feed == nil || p.feeding {
 		return
 	}
 	p.feeding = true

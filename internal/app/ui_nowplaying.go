@@ -11,6 +11,8 @@ import (
 	"netease-music-mygo/internal/netease"
 )
 
+const queuePrefetchAhead = 10
+
 var white = ui.RGB(255, 255, 255)
 
 var npSpring = ui.Animation{Spring: ui.SpringOptions{Duration: 450 * time.Millisecond, Bounce: 0.08}}
@@ -671,4 +673,10 @@ func (a *app) queuePane(c *ui.Context) {
 			pl.Jump(i)
 		}
 	}).Grow(1).Padding(8, 0, 40, 0).Gap(2)
+	// A queue-backed list is deliberately lazy. If the listener explores its
+	// last few rows, ask for the next random/list page instead of making them
+	// wait for playback to get there.
+	if _, last := a.queueList.Visible(); last >= 0 && len(order)-last <= queuePrefetchAhead {
+		pl.Prefetch()
+	}
 }
