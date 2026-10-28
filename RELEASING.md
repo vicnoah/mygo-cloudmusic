@@ -1,7 +1,8 @@
 # Releasing
 
 This fork publishes releases at `vicnoah/mygo-cloudmusic`. Windows builds are
-unsigned; the update manifests are still signed by MyGo's updater key.
+unsigned. If the fork has no macOS certificate secrets, macOS builds are also
+unsigned. Update manifests are still signed by MyGo's updater key.
 
 1. Commit pending work, bring main up to date with origin, and run `go test ./internal/...`. Others push to main too, so a release cut from a stale main leaves out their work:
 

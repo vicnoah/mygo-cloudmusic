@@ -59,6 +59,16 @@ jobs:
       - name: Install NSIS, for the Windows installers
         if: matrix.name == 'Windows'
         run: sudo apt-get update && sudo apt-get install -y nsis
+      - name: Disable unavailable macOS signing
+        if: matrix.name == 'macOS'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE" ]; then
+            jq 'del(.macos.signingIdentity, .macos.notarize)' mygo.json > "$RUNNER_TEMP/mygo.json"
+            mv "$RUNNER_TEMP/mygo.json" mygo.json
+            echo 'No macOS certificate configured; building an unsigned app.'
+          fi
       # The certificate signs the app; the notary profile, "notary" in
       # mygo.json, notarizes its disk image. Both go in a keychain of the
       # job, made the default one, where codesign and notarytool look.
@@ -71,6 +81,10 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
+          if [ -z "$MACOS_CERTIFICATE" ]; then
+            echo 'No macOS certificate configured; skipping certificate import.'
+            exit 0
+          fi
           keychain="$RUNNER_TEMP/signing.keychain-db"
           password="$(openssl rand -base64 24)"
           security create-keychain -p "$password" "$keychain"
