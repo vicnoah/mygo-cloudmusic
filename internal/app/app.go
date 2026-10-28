@@ -7,6 +7,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"netease-music-mygo/internal/fnmusic"
 	"netease-music-mygo/internal/netease"
 	"netease-music-mygo/internal/player"
 )
@@ -220,6 +221,8 @@ func Run() error {
 		a.art = newArtCache(a.post)
 		a.pl = player.New(a.post)
 		a.pl.Quality = func() string { return a.settings.Quality }
+		a.pl.FnTranscodeMode = func() fnmusic.TranscodeMode { return fnmusic.TranscodeMode(a.settings.FnTranscodeMode) }
+		a.pl.FnTranscodeBitrate = func() int { return a.settings.FnTranscodeBitrate }
 		a.pl.Normalize = func() bool { return a.settings.Normalize }
 		a.pl.Cache = newSongCache(a.settings.CacheMB)
 		a.pl.Changed = func() {

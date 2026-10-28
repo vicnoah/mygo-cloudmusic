@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -28,6 +29,11 @@ type settings struct {
 	// Quality is the level of the streams: standard, higher, exhigh,
 	// lossless or hires.
 	Quality string `json:"quality"`
+	// FnTranscodeMode says when Feiniu should make an MP3 stream.
+	FnTranscodeMode fnmusic.TranscodeMode `json:"fnTranscodeMode,omitempty"`
+	// FnTranscodeBitrate is the Feiniu MP3 rate in kilobits per second; zero
+	// keeps the service default.
+	FnTranscodeBitrate int `json:"fnTranscodeBitrate,omitempty"`
 	// Appearance is light, dark, or system to follow the system.
 	Appearance string `json:"appearance"`
 	// Smoke makes the progress bars comets trailing smoke as music plays,
@@ -75,7 +81,7 @@ type settings struct {
 }
 
 func defaultSettings() settings {
-	return settings{Source: sourceNetease, NotchActivity: true, Quality: "exhigh", Appearance: "system", Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, Captions: true}
+	return settings{Source: sourceNetease, NotchActivity: true, Quality: "exhigh", FnTranscodeMode: fnmusic.TranscodeAuto, Appearance: "system", Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, Captions: true}
 }
 
 func settingsPath() (string, error) {
@@ -132,6 +138,12 @@ func loadSettings() settings {
 		}
 		s.path = path
 	}
+	if s.FnTranscodeMode != fnmusic.TranscodeAuto && s.FnTranscodeMode != fnmusic.TranscodeNative && s.FnTranscodeMode != fnmusic.TranscodeAlways {
+		s.FnTranscodeMode = fnmusic.TranscodeAuto
+	}
+	if !fnmusic.ValidTranscodeBitrate(s.FnTranscodeBitrate) {
+		s.FnTranscodeBitrate = 0
+	}
 	return s
 }
 
@@ -171,6 +183,31 @@ var qualityLevels = []struct{ level, label string }{
 	{"exhigh", "极高（320k）"},
 	{"lossless", "无损（FLAC）"},
 	{"hires", "Hi-Res"},
+}
+
+var fnTranscodeModes = []struct {
+	mode  fnmusic.TranscodeMode
+	label string
+}{
+	{fnmusic.TranscodeAuto, "自动转码"},
+	{fnmusic.TranscodeNative, "仅播放原始格式"},
+	{fnmusic.TranscodeAlways, "始终转码"},
+}
+
+func fnTranscodeModeLabel(mode fnmusic.TranscodeMode) string {
+	for _, item := range fnTranscodeModes {
+		if item.mode == mode {
+			return item.label
+		}
+	}
+	return fnTranscodeModes[0].label
+}
+
+func fnTranscodeBitrateLabel(bitrate int) string {
+	if bitrate == 0 {
+		return "自动（飞牛默认）"
+	}
+	return fmt.Sprintf("%d kbps", bitrate)
 }
 
 // cacheLimits are the sizes the song cache may take, in megabytes.

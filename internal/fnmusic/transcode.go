@@ -29,13 +29,73 @@ func Native(format string) bool { return format == "mp3" || format == "flac" }
 // kind of file the player does not decode, or one of a CUE sheet's.
 func Transcoded(t *netease.Track) bool { return t.Cue || !Native(t.Format) }
 
+// TranscodeMode chooses when the service should make an MP3 stream.
+type TranscodeMode string
+
+const (
+	// TranscodeAuto keeps native MP3 and FLAC files as they are and converts
+	// formats the player cannot decode, or tracks cut from a CUE sheet.
+	TranscodeAuto TranscodeMode = "auto"
+	// TranscodeNative never asks the service to transcode. Unsupported files
+	// fail with a format error instead.
+	TranscodeNative TranscodeMode = "native"
+	// TranscodeAlways asks the service to make an MP3 stream for every track.
+	TranscodeAlways TranscodeMode = "always"
+)
+
+// TranscodeBitrates are the MP3 rates accepted by the Feiniu service, in
+// kilobits per second. Zero leaves the service's default unchanged.
+var TranscodeBitrates = []int{64, 128, 192, 256, 320}
+
+// ValidTranscodeBitrate reports whether bitrate is one of the rates exposed
+// by the settings UI. Zero means the service default.
+func ValidTranscodeBitrate(bitrate int) bool {
+	if bitrate == 0 {
+		return true
+	}
+	for _, allowed := range TranscodeBitrates {
+		if bitrate == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+// ShouldTranscode applies mode to a track. Invalid or empty modes retain the
+// automatic behavior so older settings files remain safe.
+func ShouldTranscode(t *netease.Track, mode TranscodeMode) bool {
+	switch mode {
+	case TranscodeNative:
+		return false
+	case TranscodeAlways:
+		return true
+	default:
+		return Transcoded(t)
+	}
+}
+
+// NativePlaybackError explains why a track cannot be played when conversion
+// is disabled.
+func NativePlaybackError(t *netease.Track) error {
+	if t.Cue {
+		return errors.New("飞牛音乐的 CUE 分轨需要转码")
+	}
+	format := strings.ToUpper(t.Format)
+	if format == "" {
+		format = "未知"
+	}
+	return fmt.Errorf("飞牛音乐的 %s 格式需要转码", format)
+}
+
 // transcode asks the service for an HLS stream of the track as codec, and
-// returns its address.
-func (c *Client) transcode(ref, codec string) (string, error) {
+// returns its address. bitrate is in kilobits per second; zero leaves it out
+// so the server's default is used.
+func (c *Client) transcode(ref, codec string, bitrate int) (string, error) {
 	var out struct {
 		URL string `json:"url"`
 	}
-	payload := map[string]any{"guid": ref, "output": map[string]any{"codec": codec, "channel": 2}}
+	output := transcodeOutput(codec, bitrate)
+	payload := map[string]any{"guid": ref, "output": output}
 	if err := c.call("POST", "/track/transcode", nil, payload, &out); err != nil {
 		return "", err
 	}
@@ -43,6 +103,14 @@ func (c *Client) transcode(ref, codec string) (string, error) {
 		return "", errors.New("fnmusic: the service gave no stream")
 	}
 	return c.absolute(out.URL)
+}
+
+func transcodeOutput(codec string, bitrate int) map[string]any {
+	output := map[string]any{"codec": codec, "channel": 2}
+	if ValidTranscodeBitrate(bitrate) && bitrate > 0 {
+		output["bitrate"] = bitrate
+	}
+	return output
 }
 
 // quit frees the transcoding the service keeps for a track, if it still
@@ -90,7 +158,13 @@ type HLS struct {
 // pieces of the result. The service lists them all at once, with the ENDLIST
 // of a stream that is whole; one still being made is waited for.
 func (c *Client) TranscodeHLS(ctx context.Context, t *netease.Track) (*HLS, error) {
-	u, err := c.transcode(t.Ref, "mp3")
+	return c.TranscodeHLSWithBitrate(ctx, t, 0)
+}
+
+// TranscodeHLSWithBitrate has the service transcode t to MP3 at bitrate
+// kilobits per second. Zero uses the service default.
+func (c *Client) TranscodeHLSWithBitrate(ctx context.Context, t *netease.Track, bitrate int) (*HLS, error) {
+	u, err := c.transcode(t.Ref, "mp3", bitrate)
 	if err != nil {
 		return nil, fmt.Errorf("转码失败：%w", trimFn(err))
 	}

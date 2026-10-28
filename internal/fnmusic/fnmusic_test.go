@@ -496,6 +496,59 @@ func TestTranscodeHLS(t *testing.T) {
 	}
 }
 
+// Transcode modes choose native playback, conversion for unsupported files,
+// or conversion for every Feiniu track as configured.
+func TestTranscodeModes(t *testing.T) {
+	tracks := []struct {
+		name string
+		tr   netease.Track
+	}{
+		{"mp3", netease.Track{Format: "mp3"}},
+		{"flac", netease.Track{Format: "flac"}},
+		{"m4a", netease.Track{Format: "m4a"}},
+		{"cue", netease.Track{Format: "flac", Cue: true}},
+	}
+	for _, tc := range tracks {
+		for _, mode := range []TranscodeMode{TranscodeAuto, TranscodeNative, TranscodeAlways, ""} {
+			want := false
+			switch mode {
+			case TranscodeAlways:
+				want = true
+			case TranscodeAuto, "":
+				want = Transcoded(&tc.tr)
+			}
+			if got := ShouldTranscode(&tc.tr, mode); got != want {
+				t.Errorf("%s in %q mode: got %v, want %v", tc.name, mode, got, want)
+			}
+		}
+	}
+	if !ValidTranscodeBitrate(0) || !ValidTranscodeBitrate(320) || ValidTranscodeBitrate(129) {
+		t.Error("accepted bitrate list is wrong")
+	}
+	if got := NativePlaybackError(&netease.Track{Format: "m4a"}).Error(); got != "飞牛音乐的 M4A 格式需要转码" {
+		t.Errorf("unsupported format error %q", got)
+	}
+	if got := NativePlaybackError(&netease.Track{Cue: true}).Error(); got != "飞牛音乐的 CUE 分轨需要转码" {
+		t.Errorf("CUE error %q", got)
+	}
+}
+
+// Transcode requests send the Feiniu bitrate in kilobits and omit it for the
+// service default.
+func TestTranscodeOutput(t *testing.T) {
+	if got := transcodeOutput("mp3", 0); got["codec"] != "mp3" || got["channel"] != 2 {
+		t.Errorf("default output %v", got)
+	} else if _, ok := got["bitrate"]; ok {
+		t.Errorf("default output unexpectedly has bitrate: %v", got)
+	}
+	if got := transcodeOutput("mp3", 192); got["bitrate"] != 192 {
+		t.Errorf("192 kbps output %v", got)
+	}
+	if got := transcodeOutput("mp3", 129); got["bitrate"] != nil {
+		t.Errorf("invalid bitrate output %v", got)
+	}
+}
+
 // The service picks the songs of a roam one after another, each asked for
 // with the roam ID of the one before.
 func TestRoam(t *testing.T) {

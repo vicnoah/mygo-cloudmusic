@@ -29,6 +29,11 @@ type Player struct {
 	post func(func())
 	// Quality returns the stream level to load, as the settings say.
 	Quality func() string
+	// FnTranscodeMode and FnTranscodeBitrate return the Feiniu playback
+	// choices. Nil callbacks retain automatic conversion at the server's
+	// default bitrate.
+	FnTranscodeMode    func() fnmusic.TranscodeMode
+	FnTranscodeBitrate func() int
 	// Normalize reports whether to even out the loudness of tracks, as
 	// the settings say.
 	Normalize func() bool
@@ -780,8 +785,19 @@ func (p *Player) markStarted() {
 // streamed into it, and kept once it has all come in.
 func (p *Player) open(t netease.Track, level string) (*netease.Stream, stream, error) {
 	if t.Source == fnmusic.Source {
-		if fnmusic.Transcoded(&t) {
-			return openTranscoded(&t)
+		mode := fnmusic.TranscodeAuto
+		if p.FnTranscodeMode != nil {
+			mode = p.FnTranscodeMode()
+		}
+		if fnmusic.ShouldTranscode(&t, mode) {
+			bitrate := 0
+			if p.FnTranscodeBitrate != nil {
+				bitrate = p.FnTranscodeBitrate()
+			}
+			return openTranscoded(&t, bitrate)
+		}
+		if !fnmusic.Native(t.Format) || t.Cue {
+			return nil, nil, fnmusic.NativePlaybackError(&t)
 		}
 		// The file is what it is: no level to choose.
 		level = "exhigh"
@@ -821,12 +837,12 @@ func songStream(t *netease.Track, level string) (*netease.Stream, error) {
 // openTranscoded opens a song the Feiniu service transcodes to MP3, which
 // it hands over in pieces. It is not kept in the cache: a seek asks for the
 // piece it lands in, so that what is kept would be whatever was played.
-func openTranscoded(t *netease.Track) (*netease.Stream, stream, error) {
+func openTranscoded(t *netease.Track, bitrate int) (*netease.Stream, stream, error) {
 	c := fnmusic.Current()
 	if c == nil {
 		return nil, nil, fnmusic.ErrSignedOut
 	}
-	h, err := c.TranscodeHLS(context.Background(), t)
+	h, err := c.TranscodeHLSWithBitrate(context.Background(), t, bitrate)
 	if err != nil {
 		return nil, nil, err
 	}
