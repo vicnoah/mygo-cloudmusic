@@ -24,7 +24,7 @@ const platforms: { os: OS; name: string; note: string; builds: Build[] }[] = [
   {
     os: 'mac',
     name: 'macOS',
-    note: 'macOS 13 或更新，已签名并经过 Apple 公证',
+    note: 'macOS 13 或更新',
     builds: [
       { label: 'Apple 芯片', kind: '.dmg', match: has('arm64', '.dmg'), primary: true },
       { label: 'Intel', kind: '.dmg', match: has('amd64', '.dmg') },
