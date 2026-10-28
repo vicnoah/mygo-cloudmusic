@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -68,7 +67,7 @@ func fnTrack(guid, name, artist, format string) netease.Track {
 // fnTestApp is an app showing a Feiniu service with a library of three
 // songs, as if its first page had come in.
 func fnTestApp(t *testing.T) *fnEnv {
-	// Random queues now fetch 100 songs at a time; leave enough room for
+	// Random queues now fetch two physical pages at a time; leave enough room for
 	// several concurrent page requests before the test drains them.
 	e := &fnEnv{asked: make(chan string, 2048), posted: make(chan func(), 256), routes: map[string]func(url.Values) any{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -364,85 +363,85 @@ func TestFnQueueGoesOnWithPages(t *testing.T) {
 	}
 }
 
-// At random a queue asks for the songs at positions of a shuffled order, each
-// in a small page of its own, a few at a time: every song once, and the song
-// at each position the very one the order says, in a library so long that the
-// service would answer the page of a position past its 2000th with its first;
-// and none of the library read whole.
+// A random refill reuses the loaded first page, reads one other page, and
+// shuffles the two pages together; later refills read two new pages.
 func TestFnRandomQueue(t *testing.T) {
 	e := fnTestApp(t)
 	a := e.a
-	const n = 5000
+	const n = 500
 	l := e.listOf(n)
+	l.pg.at(0)
+	e.drain(t, 1)
 	q := newFnQueue(l, true)
 	q.seed = 7
-	perm := rand.New(rand.NewPCG(7, 0x9e3779b97f4a7c15)).Perm(n)
+	q.basePage = 0
 	feed := a.fnFeed(q)
 	seen := map[string]bool{}
 	var got [][]netease.Track
-	for i := range 3 {
+	for i := range 2 {
 		feed(func(more []netease.Track) { got = append(got, more) })
 		for len(got) <= i {
 			e.drain(t, 1)
 		}
 	}
-	if len(got) != 3 {
+	if len(got) != 2 {
 		t.Fatalf("%d batches", len(got))
 	}
 	total := 0
-	for b, batch := range got {
+	for _, batch := range got {
 		if len(batch) != fnBatch {
 			t.Errorf("a batch of %d", len(batch))
 		}
-		for k, tr := range batch {
+		for _, tr := range batch {
 			total++
 			if seen[tr.Ref] {
 				t.Errorf("%s twice", tr.Ref)
 			}
 			seen[tr.Ref] = true
-			if want := "g" + strconv.Itoa(perm[b*fnBatch+k]); tr.Ref != want {
-				t.Errorf("song %d of the order is %s, want %s", b*fnBatch+k, tr.Ref, want)
-			}
 		}
 	}
-	if total != 3*fnBatch || q.next != 3*fnBatch {
-		t.Errorf("%d songs, next %d", total, q.next)
+	if total != 2*fnBatch || q.next != 2*fnBatch {
+		t.Fatalf("%d songs, next %d", total, q.next)
 	}
-	// Not in the order of the library.
+	// The first batch contains the already loaded first page and another page.
+	firstPages := map[int]bool{}
+	for _, tr := range got[0] {
+		var i int
+		fmt.Sscanf(strings.TrimPrefix(tr.Ref, "g"), "%d", &i)
+		firstPages[i/fnPageSize] = true
+	}
+	if len(firstPages) != 2 || !firstPages[0] {
+		t.Errorf("first batch pages: %v", firstPages)
+	}
+	// The pages are shuffled, not returned in their source order.
 	inOrder := true
 	for i, tr := range got[0] {
 		if tr.Ref != "g"+strconv.Itoa(i) {
 			inOrder = false
+			break
 		}
 	}
 	if inOrder {
-		t.Error("the first batch is the library's first songs")
+		t.Error("the first batch is in the library's order")
 	}
-	// Each song was asked for in a small page, and the library not read
-	// whole: the one page of the usual size is the first, for the length.
-	small, pages := 0, 0
+	// The first page was already loaded; each later batch asks for two pages.
+	pages := 0
 	for len(e.asked) > 0 {
 		s := <-e.asked
-		if !strings.HasPrefix(s, "/track/list") {
-			continue
-		}
-		if strings.Contains(s, "size=100") {
+		if strings.HasPrefix(s, "/track/list") {
 			pages++
-		} else {
-			small++
 		}
 	}
-	if small < 3*fnBatch || pages > 1 {
-		t.Errorf("%d songs asked in small pages, %d pages of the usual size", small, pages)
+	if pages != 4 {
+		t.Errorf("%d page requests, want first plus three random pages", pages)
 	}
 	// The same seed makes the same order, which is how a restart goes on.
 	q2 := newFnQueue(l, true)
-	q2.seed = 7
-	q2.next = fnBatch
+	q2.seed, q2.basePage, q2.next = 7, 0, fnBatch
 	var again []netease.Track
 	a.fnFeed(q2)(func(more []netease.Track) { again = more })
-	for len(again) == 0 {
-		e.drain(t, 1)
+	if len(again) != fnBatch {
+		t.Fatalf("restored batch has %d songs", len(again))
 	}
 	if again[0].Ref != got[1][0].Ref {
 		t.Errorf("from the seed and where it had got to: %s, was %s", again[0].Ref, got[1][0].Ref)
@@ -460,7 +459,7 @@ func TestFnOriginRoundTrip(t *testing.T) {
 	if err := json.Unmarshal([]byte(q.origin()), &o); err != nil {
 		t.Fatal(err)
 	}
-	if o != (fnOrigin{T: listAlbum, Ref: "alb", Shuffle: true, Seed: 42, Next: 30}) {
+	if o != (fnOrigin{T: listAlbum, Ref: "alb", Shuffle: true, Seed: 42, Base: -1, Layout: fnRandomLayout, Next: 30}) {
 		t.Errorf("%+v", o)
 	}
 	if got := listID(fnSpec{typ: listAlbum, ref: "alb"}); got != fnmusic.AlbumID("alb") || got != l.id {
