@@ -17,9 +17,10 @@ import (
 // every song comes once. The seed and how far the queue has got are kept in
 // the session, so that after a restart the same order goes on.
 
-// fnBatch is how many songs a queue asks for at a time, at random: one
-// request for each, a few at once.
-const fnBatch = 10
+// fnBatch is how many songs a random queue asks for at a time. The first
+// prefetch therefore leaves a full page for the queue and cover-wall views;
+// later batches are requested as playback or scrolling nears the end.
+const fnBatch = 100
 
 type fnQueue struct {
 	list    *fnList

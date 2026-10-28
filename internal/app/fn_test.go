@@ -68,7 +68,9 @@ func fnTrack(guid, name, artist, format string) netease.Track {
 // fnTestApp is an app showing a Feiniu service with a library of three
 // songs, as if its first page had come in.
 func fnTestApp(t *testing.T) *fnEnv {
-	e := &fnEnv{asked: make(chan string, 256), posted: make(chan func(), 256), routes: map[string]func(url.Values) any{}}
+	// Random queues now fetch 100 songs at a time; leave enough room for
+	// several concurrent page requests before the test drains them.
+	e := &fnEnv{asked: make(chan string, 2048), posted: make(chan func(), 256), routes: map[string]func(url.Values) any{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/music/api/v1")
 		if path != "/user/password-login" {

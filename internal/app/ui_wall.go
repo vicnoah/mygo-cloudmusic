@@ -225,6 +225,13 @@ func (a *app) wall(c *ui.Context, y, w, h, top, foot, frost float32) {
 			Draggable(&ws.off, ui.DraggableOptions{Bounds: &bounds, Snap: func(p ui.Point) ui.Point { return p }, Animation: wallGlide})
 		ws.shown = plane.DragOffset()
 		at := addPoint(ws.shown, ws.pan)
+		// The wall is another view of the same lazy queue. When its last
+		// rows approach the viewport, grow the queue before the listener
+		// reaches the hard edge.
+		lastRow := int(math.Floor(float64((h - at.Y) / wallPitch)))
+		if lastRow >= l.rows-2 {
+			pl.Prefetch()
+		}
 		// The rows sway while the song plays, and settle while it is paused.
 		swaying := pl.Playing() && !c.Preferences().ReduceMotion
 		now := c.Now()
