@@ -3,7 +3,6 @@ package app
 import (
 	"encoding/json"
 	"math/rand/v2"
-	"sync"
 
 	"netease-music-mygo/internal/netease"
 )
@@ -11,30 +10,35 @@ import (
 // A queue of the Feiniu platform is read from a list of songs as it is
 // played, in the order of the list or at random: never the whole of it.
 //
-// At random, the order is a shuffled list of the positions in the list,
-// from a seed, and what is asked of the service is the song at each
-// position, a few at a time. Nothing is shuffled that is not there, and
-// every song comes once. The seed and how far the queue has got are kept in
-// the session, so that after a restart the same order goes on.
+// At random, the list's pages are shuffled, two pages are read together, and
+// the two pages are shuffled once more before they enter the queue. Nothing
+// is shuffled that is not there, and every page is used once. The seed and
+// how far the queue has got are kept in the session, so that after a restart
+// the same order goes on.
 
-// fnBatch is how many songs a random queue asks for at a time. The first
-// prefetch therefore leaves a full page for the queue and cover-wall views;
-// later batches are requested as playback or scrolling nears the end.
-const fnBatch = 100
+// fnBatch is the logical size of a random refill. A normal refill joins two
+// physical list pages; the first refill can reuse the page already shown by
+// the list and asks for only one more page.
+const fnBatch = fnPageSize * 2
+
+// fnRandomLayout identifies the page-pair random queue format kept in a
+// session origin. Older origins used per-track positions and cannot resume
+// this layout safely.
+const fnRandomLayout = 2
 
 type fnQueue struct {
-	list    *fnList
-	shuffle bool
-	seed    int64
-	perm    []int // the positions at random, made once the list's length is known
-	next    int   // in order, the position asked for next; at random, how far into perm
+	list     *fnList
+	shuffle  bool
+	seed     int64
+	basePage int // the loaded page used by the first random batch, or -1
+	next     int // in order, the position asked for next; at random, tracks batched
 	// pos is the position in the list of each song handed to the player,
 	// to read on in order from the song playing when shuffle is switched off.
 	pos map[int64]int
 }
 
 func newFnQueue(l *fnList, shuffle bool) *fnQueue {
-	q := &fnQueue{list: l, shuffle: shuffle, pos: map[int64]int{}}
+	q := &fnQueue{list: l, shuffle: shuffle, basePage: -1, pos: map[int64]int{}}
 	if shuffle {
 		q.seed = rand.Int64()
 	}
@@ -50,12 +54,18 @@ type fnOrigin struct {
 	Sort    string `json:"sort,omitempty"`
 	Shuffle bool   `json:"shuffle,omitempty"`
 	Seed    int64  `json:"seed,omitempty"`
+	Base    int    `json:"base"`
+	Layout  int    `json:"layout,omitempty"`
 	Next    int    `json:"next"`
 }
 
 func (q *fnQueue) origin() string {
 	s := q.list.spec
-	b, _ := json.Marshal(fnOrigin{T: s.typ, Ref: s.ref, Q: s.q, Sort: s.sort, Shuffle: q.shuffle, Seed: q.seed, Next: q.next})
+	layout := 0
+	if q.shuffle {
+		layout = fnRandomLayout
+	}
+	b, _ := json.Marshal(fnOrigin{T: s.typ, Ref: s.ref, Q: s.q, Sort: s.sort, Shuffle: q.shuffle, Seed: q.seed, Base: q.basePage, Layout: layout, Next: q.next})
 	return string(b)
 }
 
@@ -98,66 +108,115 @@ func (a *app) fnOrderFeed(q *fnQueue) func(got func([]netease.Track)) {
 	}
 }
 
-// randomPageSize is how large a page to ask for a song at a position of a
-// list of total songs by. The service answers a page past its 2000th with
-// its first, without a word: asking for position 3000 as page 3001 of one
-// song each gets the first song, as the nearly every of a long list would.
-// So the pages are as large as it takes to keep their numbers under a
-// thousand, and the song is the one at its place in the page.
-func randomPageSize(total int) int { return total/1000 + 1 }
+// randomPageOrder makes a stable random order of the physical pages. The
+// first page is the one already shown by the list, when it is known; the
+// following pages are all still random and each is used once.
+func randomPageOrder(total int, seed int64, base int) []int {
+	n := (total + fnPageSize - 1) / fnPageSize
+	if n == 0 {
+		return nil
+	}
+	pages := rand.New(rand.NewPCG(uint64(seed), 0x9e3779b97f4a7c15)).Perm(n)
+	if base >= 0 && base < n {
+		for i, page := range pages {
+			if page == base {
+				pages[0], pages[i] = pages[i], pages[0]
+				break
+			}
+		}
+	}
+	return pages
+}
 
-// fnRandomFeed gives the songs at the next positions of the random order,
-// fnBatch of them, each asked for alone.
+// shuffleRandomBatch makes the order inside a pair of pages reproducible
+// without keeping the whole queue in memory.
+func shuffleRandomBatch(tracks []netease.Track, seed int64, batch int) {
+	r := rand.New(rand.NewPCG(uint64(seed)^uint64(batch+1)*0x517cc1b727220a95, 0x243f6a8885a308d3^uint64(batch)))
+	r.Shuffle(len(tracks), func(i, j int) { tracks[i], tracks[j] = tracks[j], tracks[i] })
+}
+
+// fnRandomFeed gives the next logical batch. Its pages are fetched together,
+// then shuffled together before one queue update is posted.
 func (a *app) fnRandomFeed(q *fnQueue) func(got func([]netease.Track)) {
 	return func(got func([]netease.Track)) {
 		p := q.list.pg
-		p.when(0, func(ok bool) {
+		if p.total < 0 {
+			p.when(0, func(ok bool) {
+				if !ok {
+					a.toast = "加载更多歌曲失败"
+					got(nil)
+					return
+				}
+				a.fnRandomFeed(q)(got)
+			})
+			return
+		}
+		if q.next >= p.total {
+			got(nil)
+			return
+		}
+		pages := randomPageOrder(p.total, q.seed, q.basePage)
+		group := q.next / fnBatch
+		first := group * 2
+		if first >= len(pages) {
+			got(nil)
+			return
+		}
+		want := pages[first:min(first+2, len(pages))]
+		loadFnPages(p, want, func(items map[int][]netease.Track, ok bool) {
 			if !ok {
 				a.toast = "加载更多歌曲失败"
 				got(nil)
 				return
 			}
-			if len(q.perm) != p.total {
-				q.perm = rand.New(rand.NewPCG(uint64(q.seed), 0x9e3779b97f4a7c15)).Perm(p.total)
+			var out []netease.Track
+			for _, page := range want {
+				out = append(out, items[page]...)
 			}
-			if q.next >= len(q.perm) {
-				got(nil)
-				return
-			}
-			end := min(q.next+fnBatch, len(q.perm))
-			at := append([]int(nil), q.perm[q.next:end]...)
-			fetch, size := q.list.fetch, randomPageSize(p.total)
-			go func() {
-				songs := make([]*netease.Track, len(at))
-				var wg sync.WaitGroup
-				sem := make(chan struct{}, 6)
-				for k, i := range at {
-					wg.Add(1)
-					sem <- struct{}{}
-					go func() {
-						defer func() { <-sem; wg.Done() }()
-						if tr, _, err := fetch(i/size+1, size); err == nil && i%size < len(tr) {
-							songs[k] = &tr[i%size]
-						}
-					}()
+			shuffleRandomBatch(out, q.seed, group)
+			for _, page := range want {
+				for i, tr := range items[page] {
+					q.pos[tr.ID] = page*p.size + i
 				}
-				wg.Wait()
-				a.fnPost(func() {
-					var out []netease.Track
-					for k, s := range songs {
-						if s != nil {
-							out = append(out, *s)
-							q.pos[s.ID] = at[k]
-						}
-					}
-					q.next = end
-					a.noteHearts(out)
-					if len(out) == 0 {
-						a.toast = "加载更多歌曲失败"
-					}
-					got(out)
-				})
-			}()
+			}
+			start := group * fnBatch
+			q.next = min(start+fnBatch, p.total)
+			a.noteHearts(out)
+			if len(out) == 0 {
+				a.toast = "加载更多歌曲失败"
+			}
+			got(out)
+		})
+	}
+}
+
+// loadFnPages waits for a set of physical pages. pager.when coalesces pages
+// already loaded or already in flight, so a first random batch reuses the
+// page shown by the list and asks for only one new page.
+func loadFnPages(p *pager[netease.Track], pages []int, done func(map[int][]netease.Track, bool)) {
+	items := make(map[int][]netease.Track, len(pages))
+	if len(pages) == 0 {
+		done(items, true)
+		return
+	}
+	left := len(pages)
+	ok := true
+	for _, page := range pages {
+		page := page
+		p.when(page, func(got bool) {
+			if got {
+				start := page * p.size
+				end := min(start+p.size, p.total)
+				if start < end {
+					items[page] = append([]netease.Track(nil), p.items[start:end]...)
+				}
+			} else {
+				ok = false
+			}
+			left--
+			if left == 0 {
+				done(items, ok)
+			}
 		})
 	}
 }
@@ -195,14 +254,15 @@ func (a *app) playFn(l *fnList, i int) {
 	a.startQueue(q, items, at)
 }
 
-// shuffleFn plays the list in a random order. It asks for the length of the
-// list and a few songs, not for the whole of it.
+// shuffleFn plays the list in a random order. It reuses the first loaded page
+// and reads one other page for the first logical batch.
 func (a *app) shuffleFn(l *fnList) {
 	if l.shuffle {
 		return
 	}
 	l.shuffle = true
 	q := newFnQueue(l, true)
+	q.basePage = 0
 	a.fnFeed(q)(func(first []netease.Track) {
 		l.shuffle = false
 		if len(first) > 0 {
@@ -248,7 +308,14 @@ func (a *app) restoreFnOrigin(raw string) {
 		return
 	}
 	q := newFnQueue(l, o.Shuffle)
-	q.seed, q.next = o.Seed, o.Next
+	if o.Shuffle && o.Layout != fnRandomLayout {
+		// A session from the old per-track random queue has a different meaning
+		// for Next. Restart its random order rather than replaying the wrong
+		// page or duplicating songs.
+		q.seed, q.basePage, q.next = rand.Int64(), -1, 0
+	} else {
+		q.seed, q.basePage, q.next = o.Seed, o.Base, o.Next
+	}
 	a.fn.q = q
 	a.pl.AttachList(a.fnFeed(q), q.origin)
 }
