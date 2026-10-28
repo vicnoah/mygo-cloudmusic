@@ -126,7 +126,7 @@ func (a *app) settingsView(c *ui.Context) {
 		}
 
 		group("播放", func() {
-			row("音质", "仅网易云音乐：无损与 Hi-Res 需要黑胶 VIP，没有时播放所能播放的最高音质；下一首歌曲开始生效。飞牛音乐按文件原样播放", func() {
+			row("音质", "仅网易云音乐：无损与 Hi-Res 需要黑胶 VIP，没有时播放所能播放的最高音质；飞牛音乐使用下方的转码策略和码率", func() {
 				labels := make([]string, len(qualityLevels))
 				chosen := qualityLevels[2].label
 				for i, q := range qualityLevels {
@@ -139,6 +139,39 @@ func (a *app) settingsView(c *ui.Context) {
 					for _, q := range qualityLevels {
 						if q.label == chosen {
 							s.Quality = q.level
+						}
+					}
+					a.changed()
+				}
+			})
+			row("飞牛转码策略", "自动模式只转换播放器不支持的格式；仅播放原始格式时，M4A、AAC、APE 等格式无法播放", func() {
+				mode := s.FnTranscodeMode
+				chosen := fnTranscodeModeLabel(mode)
+				labels := make([]string, len(fnTranscodeModes))
+				for i, item := range fnTranscodeModes {
+					labels[i] = item.label
+				}
+				if ui.Select(c.Key("fn-transcode-mode"), &chosen, labels).Label("飞牛转码策略").Width(150).Changed() {
+					for _, item := range fnTranscodeModes {
+						if item.label == chosen {
+							s.FnTranscodeMode = item.mode
+						}
+					}
+					a.changed()
+				}
+			})
+			row("飞牛转码码率", "仅服务端转码时生效；原始 MP3/FLAC 不会重新编码，较高码率也不会提升源文件音质", func() {
+				bitrate := s.FnTranscodeBitrate
+				chosen := fnTranscodeBitrateLabel(bitrate)
+				values := append([]int{0}, fnmusic.TranscodeBitrates...)
+				labels := make([]string, len(values))
+				for i, value := range values {
+					labels[i] = fnTranscodeBitrateLabel(value)
+				}
+				if ui.Select(c.Key("fn-transcode-bitrate"), &chosen, labels).Label("飞牛转码码率").Width(150).Disabled(s.FnTranscodeMode == fnmusic.TranscodeNative).Changed() {
+					for i, label := range labels {
+						if label == chosen {
+							s.FnTranscodeBitrate = values[i]
 						}
 					}
 					a.changed()
