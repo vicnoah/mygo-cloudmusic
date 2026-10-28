@@ -419,13 +419,22 @@ func (a *app) listTracks(c *ui.Context, n int, at func(i int) *netease.Track, pl
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 					if !tr.Playable() {
 						ui.Text(c, "VIP").FontSize(9).FontWeight(800).TextColor(p.accent).Padding(0, 4).Radius(3).Border(1, p.accent.Alpha(0.6))
-					} else if tr.Source == fnmusic.Source && fnmusic.Transcoded(tr) {
-						// Played as the NAS transcodes it: it starts a little later.
-						label := strings.ToUpper(tr.Format)
-						if label == "" || tr.Cue {
-							label = "转码"
+					} else if tr.Source == fnmusic.Source {
+						mode := fnmusic.TranscodeMode(a.settings.FnTranscodeMode)
+						willTranscode := fnmusic.ShouldTranscode(tr, mode)
+						unsupported := mode == fnmusic.TranscodeNative && fnmusic.Transcoded(tr)
+						if willTranscode || unsupported {
+							// A converted track starts a little later; in native-only
+							// mode the badge explains why an unsupported row cannot play.
+							label := strings.ToUpper(tr.Format)
+							if label == "" || tr.Cue {
+								label = "转码"
+							}
+							if unsupported {
+								label = "不支持"
+							}
+							ui.Text(c, label).FontSize(9).FontWeight(800).TextColor(p.faint).Padding(0, 4).Radius(3).Border(1, p.hairline)
 						}
-						ui.Text(c, label).FontSize(9).FontWeight(800).TextColor(p.faint).Padding(0, 4).Radius(3).Border(1, p.hairline)
 					}
 					a.artistLinks(c, tr, p.muted, p.text).FontSize(12.5).SingleLine().Shrink(1).MinWidth(0)
 					if tr.Reason != "" {
