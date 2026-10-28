@@ -271,6 +271,9 @@ func (a *app) useSource(src string) {
 	a.fn.search = nil
 	a.show(a.home())
 	a.redraw()
+	if a.settingsWin != nil {
+		a.settingsWin.Invalidate()
+	}
 }
 
 // home is the page a platform starts on: for Feiniu's, its library.
