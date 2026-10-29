@@ -18,5 +18,8 @@
     "comment": "第三方网易云音乐桌面客户端",
     "categories": ["AudioVideo", "Audio", "Player"],
     "webview": false
+  },
+  "windows": {
+    "installDirName": "MyGo 云音乐"
   }
 }
