@@ -142,6 +142,82 @@ func TestRadioRefills(t *testing.T) {
 	}
 }
 
+// A list too long to have been loaded goes on with the pages its feed
+// gives, and is no radio: it has no name, and once the feed has nothing
+// more it is let go of, the queue ending where the list does.
+func TestListContinues(t *testing.T) {
+	p := &Player{at: -1}
+	p.Cue([]netease.Track{{ID: 1}, {ID: 2}})
+	pages := [][]netease.Track{{{ID: 3}, {ID: 4}}, nil}
+	asked := 0
+	p.feed = func(got func([]netease.Track)) {
+		asked++
+		got(pages[0])
+		pages = pages[1:]
+	}
+	p.refill()
+	if asked != 1 || len(p.Queue()) != 4 || p.Radio() != "" {
+		t.Fatalf("asked %d, queue %v, radio %q", asked, p.Queue(), p.Radio())
+	}
+	// Near its end again: the list has no more.
+	p.at = 3
+	p.refill()
+	if asked != 2 || p.feed != nil || len(p.Queue()) != 4 {
+		t.Errorf("asked %d, feed set %v, queue %v", asked, p.feed != nil, p.Queue())
+	}
+}
+
+// A list starts refilling with ten tracks left, rather than waiting for the
+// queue to get down to the last two tracks.
+func TestListRefillsWithTenTracksLeft(t *testing.T) {
+	p := &Player{at: -1}
+	tracks := make([]netease.Track, 20)
+	for i := range tracks {
+		tracks[i].ID = int64(i + 1)
+	}
+	p.Cue(tracks)
+	asked := 0
+	p.feed = func(got func([]netease.Track)) {
+		asked++
+		got(nil)
+	}
+
+	p.at = 9 // 11 tracks remain, so the threshold has not been reached.
+	p.refill()
+	if asked != 0 {
+		t.Fatalf("asked with %d tracks left", len(p.order)-p.at)
+	}
+	p.at = 10 // 10 tracks remain, so the next page should be requested.
+	p.refill()
+	if asked != 1 {
+		t.Fatalf("asked %d times with ten tracks left", asked)
+	}
+}
+
+// A view can request the next list page before playback reaches the refill
+// threshold, and a second request waits until the first one completes.
+func TestPrefetchRequestsListPage(t *testing.T) {
+	p := &Player{at: -1}
+	p.Cue([]netease.Track{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}})
+	asked := 0
+	var finish func([]netease.Track)
+	p.feed = func(got func([]netease.Track)) {
+		asked++
+		finish = got
+	}
+
+	p.Prefetch()
+	p.Prefetch()
+	if asked != 1 {
+		t.Fatalf("asked %d times while the first request was pending", asked)
+	}
+	finish([]netease.Track{{ID: 5}})
+	p.Prefetch()
+	if asked != 2 {
+		t.Fatalf("asked %d times after the first request completed", asked)
+	}
+}
+
 func TestNormGain(t *testing.T) {
 	for _, c := range []struct {
 		st   *netease.Stream
@@ -211,6 +287,9 @@ func TestEndRadio(t *testing.T) {
 	p.at, p.track = 1, &p.queue[1]
 	asked := 0
 	p.AttachRadio("heart", func(got func([]netease.Track)) { asked++ })
+	// The larger refill window may ask once while attaching the radio; the
+	// assertion below is about requests after the radio has been left.
+	asked = 0
 	p.EndRadio()
 	if p.Radio() != "" || p.Current().ID != 2 {
 		t.Fatalf("radio %q, current %v", p.Radio(), p.Current())
@@ -221,5 +300,92 @@ func TestEndRadio(t *testing.T) {
 	p.refill()
 	if asked != 0 {
 		t.Error("asked the radio after leaving it")
+	}
+}
+
+// Where a queue read as it is played comes from goes in the session, for
+// the app to go on reading it after a restart; and playing something that
+// has no such origin takes it away, as it would take a stale one to the
+// wrong list.
+func TestOriginIsKeptInTheSession(t *testing.T) {
+	p := &Player{at: -1}
+	p.Cue([]netease.Track{{ID: 1}, {ID: 2}})
+	p.origin = func() string { return `{"T":"album"}` }
+	s, ok := p.Session()
+	if !ok || s.Origin != `{"T":"album"}` || !p.HasOrigin() {
+		t.Fatalf("session %+v, has origin %v", s, p.HasOrigin())
+	}
+	p.endRadio()
+	p.origin = nil
+	if s, _ := p.Session(); s.Origin != "" || p.HasOrigin() {
+		t.Errorf("origin %q kept", s.Origin)
+	}
+}
+
+// Shuffle switched on or off over a queue with an origin is the app's to
+// handle, which makes the queue over from the song playing; without an
+// origin the queue is shuffled as ever.
+func TestShuffleHook(t *testing.T) {
+	p := &Player{at: -1}
+	p.Cue([]netease.Track{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}, {ID: 5}, {ID: 6}})
+	told := 0
+	p.OnShuffle = func(on bool) bool { told++; return true }
+	p.ToggleShuffle() // no origin: the player's own
+	if told != 0 || !p.Shuffle() {
+		t.Fatalf("told %d without an origin, shuffle %v", told, p.Shuffle())
+	}
+	p.ToggleShuffle()
+	p.origin = func() string { return "x" }
+	before := append([]int(nil), p.order...)
+	p.ToggleShuffle()
+	if told != 1 || !p.Shuffle() {
+		t.Fatalf("told %d, shuffle %v", told, p.Shuffle())
+	}
+	for i, v := range before {
+		if p.order[i] != v {
+			t.Fatal("the player shuffled a queue the app handles")
+		}
+	}
+}
+
+// A queue read from the song playing on has that song alone, then what the
+// list gives; it is no radio.
+func TestListFrom(t *testing.T) {
+	p := &Player{at: -1}
+	p.Cue([]netease.Track{{ID: 1}, {ID: 2}, {ID: 3}})
+	p.at, p.track = 2, &p.queue[2]
+	p.ListFrom(func(got func([]netease.Track)) { got([]netease.Track{{ID: 7}, {ID: 3}, {ID: 8}}) }, func() string { return "o" })
+	q := p.Queue()
+	if len(q) != 3 || q[0].ID != 3 || q[1].ID != 7 || q[2].ID != 8 || p.Radio() != "" || !p.HasOrigin() {
+		t.Errorf("queue %v, radio %q", q, p.Radio())
+	}
+}
+
+// OnStart is told once of a track, as it first plays: a session picked up
+// paused is not told, and playing it is; pausing and playing again is not
+// told twice.
+func TestOnStartOncePerTrack(t *testing.T) {
+	ch, p := posted()
+	defer p.out.Close()
+	var told []int64
+	p.OnStart = func(tr *netease.Track) { told = append(told, tr.ID) }
+	// Paused, as a restored session is, and not yet told of.
+	p.playing = false
+	p.TogglePlay()
+	if len(told) != 1 || told[0] != 1 {
+		t.Fatalf("told %v as the track was first played", told)
+	}
+	p.TogglePlay() // pause
+	next(t, ch)
+	p.TogglePlay() // play again
+	if len(told) != 1 {
+		t.Errorf("told %v of a track played again", told)
+	}
+	// Another track, loaded, is told of anew.
+	p.started = false
+	p.markStarted()
+	p.markStarted()
+	if len(told) != 2 {
+		t.Errorf("told %v", told)
 	}
 }

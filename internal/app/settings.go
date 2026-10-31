@@ -2,11 +2,25 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/egoist/mygo"
+
+	"netease-music-mygo/internal/fnmusic"
 )
+
+// fnmusicSettings is persisted separately from the upstream NetEase
+// settings. The active platform selects which settings page and provider are
+// used; NetEase's existing top-level fields stay unchanged for compatibility
+// with the upstream app.
+type fnmusicSettings struct {
+	Config           fnmusic.Config        `json:"config,omitempty"`
+	TranscodeMode    fnmusic.TranscodeMode `json:"transcodeMode,omitempty"`
+	TranscodeBitrate int                   `json:"transcodeBitrate,omitempty"`
+	LibrarySort      string                `json:"librarySort,omitempty"`
+}
 
 // settings are the listener's choices, kept in settings.json in the user
 // data directory.
@@ -26,6 +40,8 @@ type settings struct {
 	// Quality is the level of the streams: standard, higher, exhigh,
 	// lossless or hires.
 	Quality string `json:"quality"`
+	// FnMusic keeps Feiniu-only settings in its own platform namespace.
+	FnMusic fnmusicSettings `json:"fnmusic,omitempty"`
 	// Appearance is light, dark, or system to follow the system.
 	Appearance string `json:"appearance"`
 	// Smoke makes the progress bars comets trailing smoke as music plays,
@@ -63,12 +79,36 @@ type settings struct {
 	CacheMB int `json:"cacheMB"`
 	// SearchHistory keeps submitted keywords, most recent first.
 	SearchHistory []string `json:"searchHistory,omitempty"`
+	// Source is the active platform: sourceNetease or sourceFn. It is persisted
+	// as platform while retaining the existing runtime name for now.
+	Source string `json:"platform"`
+	// These aliases keep the current player and connection code small while
+	// the platform-specific settings page is being split out. They are never
+	// serialized; save/load synchronize them with FnMusic.
+	Fn                 fnmusic.Config        `json:"-"`
+	FnTranscodeMode    fnmusic.TranscodeMode `json:"-"`
+	FnTranscodeBitrate int                   `json:"-"`
 
 	path string // where they were loaded from, and are saved to
 }
 
 func defaultSettings() settings {
-	return settings{NotchActivity: true, Quality: "exhigh", Appearance: "system", Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, Captions: true}
+	s := settings{Source: sourceNetease, NotchActivity: true, Quality: "exhigh", Appearance: "system", Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, Captions: true}
+	s.FnMusic.TranscodeMode = fnmusic.TranscodeAuto
+	s.syncFnMusic()
+	return s
+}
+
+func (s *settings) syncFnMusic() {
+	s.Fn = s.FnMusic.Config
+	s.FnTranscodeMode = s.FnMusic.TranscodeMode
+	s.FnTranscodeBitrate = s.FnMusic.TranscodeBitrate
+}
+
+func (s *settings) syncFnMusicAliases() {
+	s.FnMusic.Config = s.Fn
+	s.FnMusic.TranscodeMode = s.FnTranscodeMode
+	s.FnMusic.TranscodeBitrate = s.FnTranscodeBitrate
 }
 
 func settingsPath() (string, error) {
@@ -125,12 +165,23 @@ func loadSettings() settings {
 		}
 		s.path = path
 	}
+	if s.Source == "" {
+		s.Source = sourceNetease
+	}
+	if s.FnMusic.TranscodeMode != fnmusic.TranscodeAuto && s.FnMusic.TranscodeMode != fnmusic.TranscodeNative && s.FnMusic.TranscodeMode != fnmusic.TranscodeAlways {
+		s.FnMusic.TranscodeMode = fnmusic.TranscodeAuto
+	}
+	if !fnmusic.ValidTranscodeBitrate(s.FnMusic.TranscodeBitrate) {
+		s.FnMusic.TranscodeBitrate = 0
+	}
+	s.syncFnMusic()
 	return s
 }
 
 // save keeps the settings where they were loaded from; defaults that were
 // never loaded, as in tests, are not saved.
 func (s settings) save() error {
+	s.syncFnMusicAliases()
 	path := s.path
 	if path == "" {
 		return nil
@@ -164,6 +215,31 @@ var qualityLevels = []struct{ level, label string }{
 	{"exhigh", "极高（320k）"},
 	{"lossless", "无损（FLAC）"},
 	{"hires", "Hi-Res"},
+}
+
+var fnTranscodeModes = []struct {
+	mode  fnmusic.TranscodeMode
+	label string
+}{
+	{fnmusic.TranscodeAuto, "自动转码"},
+	{fnmusic.TranscodeNative, "仅播放原始格式"},
+	{fnmusic.TranscodeAlways, "始终转码"},
+}
+
+func fnTranscodeModeLabel(mode fnmusic.TranscodeMode) string {
+	for _, item := range fnTranscodeModes {
+		if item.mode == mode {
+			return item.label
+		}
+	}
+	return fnTranscodeModes[0].label
+}
+
+func fnTranscodeBitrateLabel(bitrate int) string {
+	if bitrate == 0 {
+		return "自动（飞牛默认）"
+	}
+	return fmt.Sprintf("%d kbps", bitrate)
 }
 
 // cacheLimits are the sizes the song cache may take, in megabytes.

@@ -51,11 +51,11 @@ func (a *app) view(c *ui.Context) {
 			if !c.Vibrancy() {
 				side.Background(p.sidebar)
 			}
-			side.Children(func() { a.sidebar(c) })
+			side.Children(func() { a.platformSidebar(c) })
 			// Keyed, so that a popover of the sidebar opening or closing
 			// keeps what the page and its bars hold, their edges' fades.
 			ui.Box(c.Key("main")).Grow(1).Background(p.bg).BorderWidth(0, 0, 0, 1).BorderColor(p.hairline).Children(func() {
-				a.content(c)
+				a.platformContent(c)
 				// The bars float over the page, which scrolls under them:
 				// positioned, they paint over it.
 				a.pageTop(c)
@@ -65,6 +65,7 @@ func (a *app) view(c *ui.Context) {
 		a.nowPlayingLayer(c, npOpen, npSettled)
 	})
 	a.loginDialog(c)
+	a.fnDialog(c)
 	a.playlistNameDialog(c)
 	a.deletePlaylistDialog(c)
 	if a.toast != "" {
@@ -113,6 +114,9 @@ func (a *app) show(r route) {
 	if r.page == pageSearch {
 		a.query, a.searched = r.query, r
 	}
+	// Put lists back at their start on the next frame. A page can be opened
+	// by a control in the list it is on, while that list is still building.
+	a.scrollReset = true
 	a.load(r)
 }
 
@@ -135,6 +139,14 @@ func (a *app) load(r route) {
 		a.loadPodcast(r.id)
 	case pagePodcasts:
 		a.loadPodcastTab()
+	case pageFnAlbums:
+		if p := a.fnAlbums(); p != nil {
+			p.at(0)
+		}
+	case pageFnArtists:
+		if p := a.fnArtists(); p != nil {
+			p.at(0)
+		}
 	}
 }
 
@@ -178,6 +190,11 @@ func (a *app) sidebar(c *ui.Context) {
 	// the title bar it reaches up into would.
 	ui.Column(c).Fill().Padding(top, 14, 14, 14).Gap(4).DragWindow().Children(func() {
 		a.searchField(c)
+		// Emptying the box leaves the search: back to the page before.
+		if a.query == "" && a.queryWas != "" && a.onSearchPage() {
+			a.back()
+		}
+		a.queryWas = a.query
 
 		ui.Scroll(c.Key("nav")).TrackScroll(&a.navScroll).Grow(1).Margin(0, -6).Padding(0, 6).Gap(4).Children(func() {
 			a.navItem(c, iconHome, "为你推荐", route{page: pageHome})
@@ -185,8 +202,8 @@ func (a *app) sidebar(c *ui.Context) {
 			a.navItem(c, iconRadio, "私人 FM", route{page: pageFM})
 			a.navItem(c, iconCharts, "排行榜", route{page: pageCharts})
 			a.navItem(c, iconPodcast, "播客", route{page: pagePodcasts})
-			if a.searched.query != "" {
-				a.navItem(c, iconSearch, "搜索结果", a.searched)
+			if a.onSearchPage() {
+				a.navItem(c, iconSearch, "搜索结果", route{page: pageSearch})
 			}
 			a.myPlaylists(c, "我的歌单", a.mine, true, &a.mineCollapsed)
 			a.myPlaylists(c, "收藏的歌单", a.saved, false, &a.savedCollapsed)
@@ -200,9 +217,40 @@ func (a *app) sidebar(c *ui.Context) {
 	})
 }
 
+// platformSidebar is the platform seam. NetEase keeps the upstream sidebar;
+// Feiniu has its own navigation tree and never interleaves its rows with it.
+func (a *app) platformSidebar(c *ui.Context) {
+	if a.onFn() {
+		a.fnMusicSidebar(c)
+		return
+	}
+	a.sidebar(c)
+}
+
+func (a *app) fnMusicSidebar(c *ui.Context) {
+	top := float32(14)
+	if c.TitleBar().Left > 0 {
+		top = topBar(c) + 4
+	}
+	ui.Column(c).Fill().Padding(top, 14, 14, 14).Gap(4).DragWindow().Children(func() {
+		a.searchField(c)
+		if a.query == "" && a.queryWas != "" && a.onSearchPage() {
+			a.back()
+		}
+		a.queryWas = a.query
+		ui.Scroll(c.Key("nav-fnmusic")).TrackScroll(&a.navScroll).Grow(1).Margin(0, -6).Padding(0, 6).Gap(4).Children(func() {
+			a.fnNav(c)
+		})
+		if tr := a.pl.Current(); tr != nil {
+			a.sidebarNowPlaying(c, tr)
+		}
+		a.accountRow(c)
+	})
+}
+
 func (a *app) navItem(c *ui.Context, icon *ui.SVG, label string, r route) {
 	p := a.pal
-	selected := a.route.page == r.page && !a.nowPlaying
+	selected := a.route == r && !a.nowPlaying
 	b := ui.ButtonBase(c.Key(label)).Height(34).PaddingX(10).Gap(10).Radius(8).AlignItems(ui.Center).Justify(ui.Start).FocusRing(false)
 	bg := ui.Transparent
 	switch {
@@ -348,6 +396,12 @@ func (a *app) content(c *ui.Context) {
 	}
 	// Pages mark where their content is, as they scroll.
 	a.underTop, a.underBottom = false, false
+	if a.scrollReset {
+		a.scrollReset = false
+		a.trackList, a.pageScroll = ui.ListState{}, ui.ScrollState{}
+		a.fn.albumList, a.fn.artistList = ui.ListState{}, ui.ListState{}
+		a.fn.foundAlbumList, a.fn.foundArtistList = ui.ListState{}, ui.ListState{}
+	}
 	switch a.route.page {
 	case pageHome:
 		a.homePage(c)
@@ -372,6 +426,16 @@ func (a *app) content(c *ui.Context) {
 	case pagePodcasts:
 		a.podcastsPage(c)
 	}
+}
+
+// platformContent keeps the complete Feiniu home/list implementation behind
+// one seam while leaving the upstream NetEase pages untouched.
+func (a *app) platformContent(c *ui.Context) {
+	if a.onFn() {
+		a.fnContent(c)
+		return
+	}
+	a.content(c)
 }
 
 // centered shows a message, with a retry button if retry is set: what a
@@ -448,6 +512,10 @@ func (a *app) loadPlaylist(id int64, thenPlay bool) {
 	if a.loadingPl[id] {
 		return
 	}
+	if id < 0 {
+		a.openFnList(id, thenPlay)
+		return
+	}
 	a.loadingPl[id] = true
 	delete(a.plErr, id)
 	go func() {
@@ -473,4 +541,14 @@ func firstPlayable(tracks []netease.Track) int {
 		}
 	}
 	return 0
+}
+
+// onSearchPage reports whether a page of search results is shown, including
+// Feiniu's album and artist result pages.
+func (a *app) onSearchPage() bool {
+	switch a.route.page {
+	case pageSearch, pageFnFoundAlbums, pageFnFoundArtists:
+		return true
+	}
+	return false
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"netease-music-mygo/internal/fnmusic"
 	"netease-music-mygo/internal/netease"
 	"netease-music-mygo/internal/player"
 )
@@ -25,6 +26,11 @@ const (
 	pageUser
 	pagePodcast
 	pagePodcasts
+	pageFnAlbums
+	pageFnArtists
+	pageFnFoundAlbums  // the albums a search found, all of them
+	pageFnFoundArtists // and its artists
+	pageFnRoam
 )
 
 type route struct {
@@ -50,6 +56,7 @@ type app struct {
 	history []route
 	forward []route // the pages gone back from, the last first to go to
 
+	fn           fnState // the Feiniu music service, the other source
 	profile      *netease.Profile
 	mine, saved  []netease.Playlist // the listener's playlists: made, and saved
 	recPlaylists []netease.Playlist // the day's playlists picked for the listener
@@ -87,8 +94,11 @@ type app struct {
 	// Where the page and the sidebar are scrolled, kept while Now Playing
 	// covers them, unbuilt.
 	pageScroll ui.ScrollState
-	navScroll  ui.ScrollState
-	scrolled   route // the page trackList and pageScroll are of
+	// scrollReset puts the lists of the page back at their start, as the
+	// next frame begins (resetListScroll).
+	scrollReset bool
+	navScroll   ui.ScrollState
+	scrolled    route // the page trackList and pageScroll are of
 
 	mineCollapsed, savedCollapsed bool
 
@@ -97,6 +107,7 @@ type app struct {
 	searches    map[route]*searchData // the results of each search, by its page
 	searched    route                 // the search last shown, which the sidebar goes back to
 	suggestions suggestState          // what the search field's query may be after
+	queryWas    string                // the query as the last frame had it, to see it emptied
 
 	nowPlaying  bool
 	npOpen      bool      // Now Playing as it last showed: open or not
@@ -203,18 +214,23 @@ func Run() error {
 	mygo.App.WhenReady(func() {
 		a.settings = loadSettings()
 		a.settings.applyAppearance()
+		a.route = a.home()
 		a.npPane = a.lyricsPaneChosen()
 		// Before the window: on Windows it lays out its content as it is
 		// made, and the view asks the player what plays.
 		a.art = newArtCache(a.post)
 		a.pl = player.New(a.post)
 		a.pl.Quality = func() string { return a.settings.Quality }
+		a.pl.FnTranscodeMode = func() fnmusic.TranscodeMode { return fnmusic.TranscodeMode(a.settings.FnTranscodeMode) }
+		a.pl.FnTranscodeBitrate = func() int { return a.settings.FnTranscodeBitrate }
 		a.pl.Normalize = func() bool { return a.settings.Normalize }
 		a.pl.Cache = newSongCache(a.settings.CacheMB)
 		a.pl.Changed = func() {
 			a.keepSession()
 			a.syncCaptions()
 		}
+		a.pl.OnShuffle = a.fnShuffleToggled
+		a.pl.OnStart = a.reportStart
 		a.volume = a.settings.Volume
 		a.pl.SetVolume(a.volume)
 		a.win = mygo.NewWindow(mygo.WindowOptions{
@@ -235,6 +251,7 @@ func Run() error {
 			Content:              ui.View(a.view),
 		})
 		a.setMenu()
+		a.startFn()
 		a.boot()
 		// The notch player is macOS's, over its menu bar: elsewhere it would
 		// hang at the top of the screen as a black box.
