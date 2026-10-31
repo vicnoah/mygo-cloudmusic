@@ -1,6 +1,11 @@
 package fnmusic
 
-import "netease-music-mygo/internal/netease"
+import (
+	"github.com/egoist/mygo/ui"
+
+	"netease-music-mygo/internal/netease"
+	"netease-music-mygo/internal/platform/paging"
+)
 
 // Page identifies a route owned by a platform UI. The root app translates it
 // to its shared route type; the platform package never imports that type.
@@ -42,4 +47,28 @@ type Host interface {
 	ShowMain()
 	Toast(string)
 	Player() PlayerPort
+
+	// The platform owns which navigation item and page is shown. The host
+	// supplies only shared drawing and interaction primitives.
+	SearchField(*ui.Context)
+	NavItem(*ui.Context, string, string, Route)
+	AccountRow(*ui.Context)
+	NowPlaying(*ui.Context, *netease.Track)
+	RenderConnection(*ui.Context, *State)
+	RenderTracks(*ui.Context, *List, TrackView)
+	RenderCards(*ui.Context, *paging.Pager[netease.Playlist], CardView)
+	RenderSearch(*ui.Context, *State, Route)
+}
+
+// TrackView describes a platform list without exposing root app routes or UI
+// list state to the platform package.
+type TrackView struct {
+	Title string
+	Sub   string
+}
+
+// CardView describes an album, artist or playlist card page.
+type CardView struct {
+	Title string
+	Sub   string
 }
