@@ -329,24 +329,6 @@ func (a *app) accountMenu(c *ui.Context, row ui.Element) {
 		if w := row.Bounds().W; w > 0 {
 			panel.Width(w)
 		}
-		ui.Text(c, "音乐平台").FontSize(11).FontWeight(600).TextColor(a.pal.faint).Margin(4, 8, 3, 8)
-		for _, pf := range platforms {
-			chosen := a.settings.Source == pf.source
-			mark := ""
-			if chosen {
-				mark = "✓"
-			}
-			item := a.menuItem(c, pf.icon, pf.name, mark)
-			// The keys start from the platform shown.
-			if chosen {
-				item.AutoFocus()
-			}
-			if item.Clicked() {
-				a.accountOpen = false
-				a.useSource(pf.source)
-			}
-		}
-		ui.Box(c).Height(0.5).Margin(4, 8).Background(pop.edge)
 		shortcut := "Ctrl+,"
 		if runtime.GOOS == "darwin" {
 			shortcut = "⌘,"

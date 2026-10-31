@@ -51,11 +51,11 @@ func (a *app) view(c *ui.Context) {
 			if !c.Vibrancy() {
 				side.Background(p.sidebar)
 			}
-			side.Children(func() { a.sidebar(c) })
+			side.Children(func() { a.platformSidebar(c) })
 			// Keyed, so that a popover of the sidebar opening or closing
 			// keeps what the page and its bars hold, their edges' fades.
 			ui.Box(c.Key("main")).Grow(1).Background(p.bg).BorderWidth(0, 0, 0, 1).BorderColor(p.hairline).Children(func() {
-				a.content(c)
+				a.platformContent(c)
 				// The bars float over the page, which scrolls under them:
 				// positioned, they paint over it.
 				a.pageTop(c)
@@ -197,10 +197,6 @@ func (a *app) sidebar(c *ui.Context) {
 		a.queryWas = a.query
 
 		ui.Scroll(c.Key("nav")).TrackScroll(&a.navScroll).Grow(1).Margin(0, -6).Padding(0, 6).Gap(4).Children(func() {
-			if a.onFn() {
-				a.fnNav(c)
-				return
-			}
 			a.navItem(c, iconHome, "为你推荐", route{page: pageHome})
 			a.navItem(c, iconDaily, "每日推荐", route{page: pageDaily})
 			a.navItem(c, iconRadio, "私人 FM", route{page: pageFM})
@@ -214,6 +210,37 @@ func (a *app) sidebar(c *ui.Context) {
 		})
 
 		// What plays, as a card at the foot of the sidebar, over who listens.
+		if tr := a.pl.Current(); tr != nil {
+			a.sidebarNowPlaying(c, tr)
+		}
+		a.accountRow(c)
+	})
+}
+
+// platformSidebar is the platform seam. NetEase keeps the upstream sidebar;
+// Feiniu has its own navigation tree and never interleaves its rows with it.
+func (a *app) platformSidebar(c *ui.Context) {
+	if a.onFn() {
+		a.fnMusicSidebar(c)
+		return
+	}
+	a.sidebar(c)
+}
+
+func (a *app) fnMusicSidebar(c *ui.Context) {
+	top := float32(14)
+	if c.TitleBar().Left > 0 {
+		top = topBar(c) + 4
+	}
+	ui.Column(c).Fill().Padding(top, 14, 14, 14).Gap(4).DragWindow().Children(func() {
+		a.searchField(c)
+		if a.query == "" && a.queryWas != "" && a.onSearchPage() {
+			a.back()
+		}
+		a.queryWas = a.query
+		ui.Scroll(c.Key("nav-fnmusic")).TrackScroll(&a.navScroll).Grow(1).Margin(0, -6).Padding(0, 6).Gap(4).Children(func() {
+			a.fnNav(c)
+		})
 		if tr := a.pl.Current(); tr != nil {
 			a.sidebarNowPlaying(c, tr)
 		}
@@ -375,10 +402,6 @@ func (a *app) content(c *ui.Context) {
 		a.fn.albumList, a.fn.artistList = ui.ListState{}, ui.ListState{}
 		a.fn.foundAlbumList, a.fn.foundArtistList = ui.ListState{}, ui.ListState{}
 	}
-	if a.onFn() {
-		a.fnContent(c)
-		return
-	}
 	switch a.route.page {
 	case pageHome:
 		a.homePage(c)
@@ -403,6 +426,16 @@ func (a *app) content(c *ui.Context) {
 	case pagePodcasts:
 		a.podcastsPage(c)
 	}
+}
+
+// platformContent keeps the complete Feiniu home/list implementation behind
+// one seam while leaving the upstream NetEase pages untouched.
+func (a *app) platformContent(c *ui.Context) {
+	if a.onFn() {
+		a.fnContent(c)
+		return
+	}
+	a.content(c)
 }
 
 // centered shows a message, with a retry button if retry is set: what a

@@ -9,6 +9,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,6 +25,27 @@ import (
 
 	"netease-music-mygo/internal/netease"
 )
+
+// Feiniu cover downloads are capped at 240px before shared artwork handling,
+// even when the service returns its original 640px image.
+func TestCapCover(t *testing.T) {
+	src := image.NewRGBA(image.Rect(0, 0, 640, 480))
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, src); err != nil {
+		t.Fatal(err)
+	}
+	data, err := capCover(encoded.Bytes(), 240)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := img.Bounds().Size(); got.X != 240 || got.Y != 180 {
+		t.Fatalf("capped cover=%v, want 240x180", got)
+	}
+}
 
 // The service may be mounted anywhere a reverse proxy puts it, and is under
 // /music/api/v1 there.

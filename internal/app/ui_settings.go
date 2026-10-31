@@ -2,7 +2,6 @@ package app
 
 import (
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -53,6 +52,163 @@ func (a *app) changed() {
 }
 
 func (a *app) settingsView(c *ui.Context) {
+	if a.onFn() {
+		a.fnmusicSettingsView(c)
+		return
+	}
+	a.neteaseSettingsView(c)
+}
+
+func (a *app) settingsFrame(c *ui.Context, title string, body func(*ui.Context, palette)) {
+	t := *c.Theme()
+	p := paletteFor(&t)
+	t.Accent, t.AccentText = p.accent, p.onAccent
+	c.SetTheme(&t)
+	c.Root().Background(p.sidebar)
+	c.OnShortcut(ui.Cmd, ui.KeyW, func() { a.settingsWin.Close() })
+	ui.Scroll(c).Fill().Padding(24, 28, 32, 28).Gap(8).Children(func() { body(c, p) })
+}
+
+func (a *app) platformSetting(c *ui.Context, p palette, row func(string, string, func())) {
+	row("音乐平台", "切换后主页和设置会切换到对应平台", func() {
+		labels := []string{"网易云音乐", "飞牛音乐"}
+		chosen := labels[0]
+		if a.onFn() {
+			chosen = labels[1]
+		}
+		if ui.Select(c.Key("platform"), &chosen, labels).Label("音乐平台").Width(150).Changed() {
+			if chosen == labels[1] {
+				a.useSource(sourceFn)
+			} else {
+				a.useSource(sourceNetease)
+			}
+		}
+	})
+}
+
+func (a *app) fnmusicSettingsView(c *ui.Context) {
+	a.settingsFrame(c, "飞牛音乐", func(c *ui.Context, p palette) {
+		s := &a.settings
+		group := func(title string, rows func()) {
+			ui.Text(c, title).FontSize(12).FontWeight(600).TextColor(p.muted).Margin(14, 4, 4, 4)
+			ui.Column(c).Radius(12).Background(p.bg).Border(1, p.hairline).Dividers(1, p.hairline).Children(rows)
+		}
+		row := func(label, desc string, control func()) {
+			ui.Row(c).Padding(12, 16).Gap(16).AlignItems(ui.Center).MinHeight(48).Children(func() {
+				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
+					ui.Text(c, label).FontSize(13.5).FontWeight(500)
+					if desc != "" {
+						ui.Text(c, desc).FontSize(12).TextColor(p.muted).LineHeight(1.4)
+					}
+				})
+				control()
+			})
+		}
+		group("平台", func() { a.platformSetting(c, p, row) })
+		group("飞牛音乐", func() {
+			if a.fn.client == nil {
+				row("未连接", "连接后可播放飞牛音乐库、歌单和喜欢的歌曲", func() {
+					if ui.PrimaryButton(c.Key("fn-connect"), "连接…").Clicked() {
+						a.showMain()
+						a.openFnConnect()
+						a.win.Invalidate()
+					}
+				})
+				return
+			}
+			cfg := a.fn.client.Config()
+			status := "已连接 · " + cfg.Address
+			if a.fn.err != "" {
+				status = a.fn.err
+			}
+			row(cfg.Username, status, func() {
+				if ui.Button(c.Key("fn-reconnect"), "重新连接…").Clicked() {
+					a.showMain()
+					a.openFnConnect()
+					a.win.Invalidate()
+				}
+				if ui.Button(c.Key("fn-disconnect"), "断开").Clicked() {
+					a.disconnectFn()
+				}
+			})
+			row("转码策略", "自动模式只转换播放器不支持的格式", func() {
+				mode := s.FnMusic.TranscodeMode
+				chosen := fnTranscodeModeLabel(mode)
+				labels := make([]string, len(fnTranscodeModes))
+				for i, item := range fnTranscodeModes {
+					labels[i] = item.label
+				}
+				if ui.Select(c.Key("fn-transcode-mode"), &chosen, labels).Label("转码策略").Width(150).Changed() {
+					for _, item := range fnTranscodeModes {
+						if item.label == chosen {
+							s.FnMusic.TranscodeMode = item.mode
+						}
+					}
+					a.changed()
+				}
+			})
+			row("转码码率", "仅服务端转码时生效", func() {
+				values := append([]int{0}, fnmusic.TranscodeBitrates...)
+				labels := make([]string, len(values))
+				chosen := fnTranscodeBitrateLabel(s.FnMusic.TranscodeBitrate)
+				for i, value := range values {
+					labels[i] = fnTranscodeBitrateLabel(value)
+				}
+				if ui.Select(c.Key("fn-transcode-bitrate"), &chosen, labels).Label("转码码率").Width(150).Disabled(s.FnMusic.TranscodeMode == fnmusic.TranscodeNative).Changed() {
+					for i, label := range labels {
+						if label == chosen {
+							s.FnMusic.TranscodeBitrate = values[i]
+						}
+					}
+					a.changed()
+				}
+			})
+		})
+		group("缓存", func() {
+			row("歌曲缓存", "听过的歌曲保存在本机；"+a.cacheUsage(), func() {
+				labels := make([]string, len(cacheLimits))
+				chosen := cacheLimits[2].label
+				for i, l := range cacheLimits {
+					labels[i] = l.label
+					if l.mb == s.CacheMB {
+						chosen = l.label
+					}
+				}
+				if ui.Select(c.Key("cache"), &chosen, labels).Label("歌曲缓存").Width(150).Changed() {
+					for _, l := range cacheLimits {
+						if l.label == chosen {
+							s.CacheMB = l.mb
+						}
+					}
+					a.changed()
+					a.applyCacheLimit()
+				}
+			})
+			row("清除缓存", "删除保存在本机的全部歌曲", func() {
+				if ui.Button(c.Key("clear-cache"), "清除").Disabled(a.cacheUsed <= 0).Clicked() {
+					a.clearCache()
+				}
+			})
+		})
+		group("外观", func() {
+			row("外观", "", func() {
+				modes := []string{"system", "light", "dark"}
+				i := 0
+				for k, m := range modes {
+					if m == s.Appearance {
+						i = k
+					}
+				}
+				if segmented(c.Key("appearance"), &i, "跟随系统", "浅色", "深色") {
+					s.Appearance = modes[i]
+					a.changed()
+				}
+			})
+		})
+	})
+}
+
+func (a *app) neteaseSettingsView(c *ui.Context) {
 	t := *c.Theme()
 	p := paletteFor(&t)
 	t.Accent, t.AccentText = p.accent, p.onAccent
@@ -77,6 +233,7 @@ func (a *app) settingsView(c *ui.Context) {
 				control()
 			})
 		}
+		group("平台", func() { a.platformSetting(c, p, row) })
 
 		// Only on macOS: elsewhere the icon is always in the notification
 		// area.
@@ -125,79 +282,39 @@ func (a *app) settingsView(c *ui.Context) {
 			})
 		}
 
-		if !a.onFn() {
-			group("播放", func() {
-				row("音质", "仅网易云音乐：无损与 Hi-Res 需要黑胶 VIP，没有时播放所能播放的最高音质；下一首歌曲开始生效", func() {
-					labels := make([]string, len(qualityLevels))
-					chosen := qualityLevels[2].label
-					for i, q := range qualityLevels {
-						labels[i] = q.label
-						if q.level == s.Quality {
-							chosen = q.label
+		group("播放", func() {
+			row("音质", "仅网易云音乐：无损与 Hi-Res 需要黑胶 VIP，没有时播放所能播放的最高音质；下一首歌曲开始生效", func() {
+				labels := make([]string, len(qualityLevels))
+				chosen := qualityLevels[2].label
+				for i, q := range qualityLevels {
+					labels[i] = q.label
+					if q.level == s.Quality {
+						chosen = q.label
+					}
+				}
+				if ui.Select(c.Key("quality"), &chosen, labels).Label("音质").Width(150).Changed() {
+					for _, q := range qualityLevels {
+						if q.label == chosen {
+							s.Quality = q.level
 						}
 					}
-					if ui.Select(c.Key("quality"), &chosen, labels).Label("音质").Width(150).Changed() {
-						for _, q := range qualityLevels {
-							if q.label == chosen {
-								s.Quality = q.level
-							}
-						}
-						a.changed()
-					}
-				})
-				row("间奏时显示热评", "前奏、间奏与尾奏时，歌词处换成这首歌的热门评论", func() {
-					if ui.Switch(c.Key("hot-comments"), &s.HotComments).Label("间奏时显示热评").Changed() {
-						a.changed()
-					}
-				})
-				row("音量均衡", "按网易云音乐测得的响度调整每首歌的音量，让歌曲听起来一样响", func() {
-					if ui.Switch(c.Key("normalize"), &s.Normalize).Label("音量均衡").Changed() {
-						a.pl.SetVolume(a.volume)
-						a.changed()
-					}
-				})
+					a.changed()
+				}
 			})
-		}
-
-		if a.onFn() && a.fn.client != nil {
-			group("飞牛音乐", func() {
-				row("转码策略", "自动模式只转换播放器不支持的格式；仅播放原始格式时，M4A、AAC、APE 等格式无法播放", func() {
-					mode := s.FnTranscodeMode
-					chosen := fnTranscodeModeLabel(mode)
-					labels := make([]string, len(fnTranscodeModes))
-					for i, item := range fnTranscodeModes {
-						labels[i] = item.label
-					}
-					if ui.Select(c.Key("fn-transcode-mode"), &chosen, labels).Label("转码策略").Width(150).Changed() {
-						for _, item := range fnTranscodeModes {
-							if item.label == chosen {
-								s.FnTranscodeMode = item.mode
-							}
-						}
-						a.changed()
-					}
-				})
-				row("转码码率", "仅服务端转码时生效；原始 MP3/FLAC 不会重新编码，较高码率也不会提升源文件音质", func() {
-					bitrate := s.FnTranscodeBitrate
-					chosen := fnTranscodeBitrateLabel(bitrate)
-					values := append([]int{0}, fnmusic.TranscodeBitrates...)
-					labels := make([]string, len(values))
-					for i, value := range values {
-						labels[i] = fnTranscodeBitrateLabel(value)
-					}
-					if ui.Select(c.Key("fn-transcode-bitrate"), &chosen, labels).Label("转码码率").Width(150).Disabled(s.FnTranscodeMode == fnmusic.TranscodeNative).Changed() {
-						for i, label := range labels {
-							if label == chosen {
-								s.FnTranscodeBitrate = values[i]
-							}
-						}
-						a.changed()
-					}
-				})
+			row("间奏时显示热评", "前奏、间奏与尾奏时，歌词处换成这首歌的热门评论", func() {
+				if ui.Switch(c.Key("hot-comments"), &s.HotComments).Label("间奏时显示热评").Changed() {
+					a.changed()
+				}
 			})
-		}
+			row("音量均衡", "按网易云音乐测得的响度调整每首歌的音量，让歌曲听起来一样响", func() {
+				if ui.Switch(c.Key("normalize"), &s.Normalize).Label("音量均衡").Changed() {
+					a.pl.SetVolume(a.volume)
+					a.changed()
+				}
+			})
+		})
 
-		if !a.onFn() && a.captionsShown() {
+		if a.captionsShown() {
 			group("播客", func() { a.captionSettings(row, c) })
 		}
 
@@ -277,43 +394,6 @@ func (a *app) settingsView(c *ui.Context) {
 				})
 				if ui.Button(c.Key("logout"), "退出登录").Clicked() {
 					a.signOut()
-				}
-			})
-		})
-
-		group("飞牛音乐", func() {
-			if a.fn.client == nil {
-				row("未连接", "连接后可播放飞牛 NAS 上的音乐库、歌单与喜欢的歌曲", func() {
-					if ui.PrimaryButton(c.Key("fn-connect"), "连接…").Clicked() {
-						a.showMain()
-						a.openFnConnect()
-						a.win.Invalidate()
-					}
-				})
-				return
-			}
-			cfg := a.fn.client.Config()
-			status := "已连接 · " + cfg.Address
-			if cfg.HTTPS && !strings.Contains(cfg.Address, "://") {
-				status = "已连接 · https://" + cfg.Address
-			}
-			if cfg.Mode == fnmusic.ModeFNConnect {
-				status = "已连接 · FN ID " + cfg.Address
-				if r := a.fn.client.Route(); r != "" {
-					status += "（" + r + "）"
-				}
-			}
-			if a.fn.err != "" {
-				status = a.fn.err
-			}
-			row(cfg.Username, status, func() {
-				if ui.Button(c.Key("fn-reconnect"), "重新连接…").Clicked() {
-					a.showMain()
-					a.openFnConnect()
-					a.win.Invalidate()
-				}
-				if ui.Button(c.Key("fn-disconnect"), "断开").Clicked() {
-					a.disconnectFn()
 				}
 			})
 		})

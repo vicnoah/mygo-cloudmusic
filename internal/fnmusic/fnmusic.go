@@ -14,6 +14,10 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	"image/png"
 	"io"
 	"net/http"
 	"net/url"
@@ -23,6 +27,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/image/draw"
+	_ "golang.org/x/image/webp"
 	"netease-music-mygo/internal/netease"
 )
 
@@ -606,8 +612,46 @@ func (c *Client) Cover(id string, size int) ([]byte, error) {
 		if err == nil && strings.Contains(res.Header.Get("Content-Type"), "json") {
 			return nil, errors.New("fnmusic: no cover")
 		}
-		return b, err
+		if err != nil {
+			return nil, err
+		}
+		return capCover(b, 240)
 	}
+}
+
+// capCover keeps Feiniu's cover payloads bounded at the size used by the
+// upstream wall. The service may return its original 640px image even when a
+// smaller size was requested, so normalize it at the platform adapter
+// boundary before the shared artwork code sees it.
+func capCover(data []byte, maxSize int) ([]byte, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Width <= maxSize && cfg.Height <= maxSize {
+		return data, nil
+	}
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	sw, sh := src.Bounds().Dx(), src.Bounds().Dy()
+	if sw <= 0 || sh <= 0 {
+		return nil, errors.New("fnmusic: empty cover")
+	}
+	w, h := sw, sh
+	if w >= h {
+		w, h = maxSize, max(1, int(float64(sh)*float64(maxSize)/float64(sw)+0.5))
+	} else {
+		h, w = maxSize, max(1, int(float64(sw)*float64(maxSize)/float64(sh)+0.5))
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
+	var out bytes.Buffer
+	if err := png.Encode(&out, dst); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
 
 // Lyrics returns the lyrics of a track as LRC, or "" for none.

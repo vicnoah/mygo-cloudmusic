@@ -11,6 +11,34 @@ import (
 	"netease-music-mygo/internal/fnmusic"
 )
 
+// desktopLyricsSettings are the desktop lyric window's persistent choices.
+// A pointer in settings keeps older settings files compatible: missing
+// desktop-lyrics data gets the current defaults on first use.
+type desktopLyricsSettings struct {
+	Locked          bool    `json:"locked,omitempty"`
+	ShowTranslation bool    `json:"showTranslation"`
+	FontSize        float32 `json:"fontSize,omitempty"`
+	Color           int     `json:"color,omitempty"`
+	X               int     `json:"x,omitempty"`
+	Y               int     `json:"y,omitempty"`
+	PositionSet     bool    `json:"positionSet,omitempty"`
+}
+
+// fnmusicSettings is persisted separately from the upstream NetEase
+// settings. The active platform selects which settings page and provider are
+// used; NetEase's existing top-level fields stay unchanged for compatibility
+// with the upstream app.
+type fnmusicSettings struct {
+	Config           fnmusic.Config        `json:"config,omitempty"`
+	TranscodeMode    fnmusic.TranscodeMode `json:"transcodeMode,omitempty"`
+	TranscodeBitrate int                   `json:"transcodeBitrate,omitempty"`
+	LibrarySort      string                `json:"librarySort,omitempty"`
+}
+
+func defaultDesktopLyricsSettings() desktopLyricsSettings {
+	return desktopLyricsSettings{ShowTranslation: true, FontSize: 30}
+}
+
 // settings are the listener's choices, kept in settings.json in the user
 // data directory.
 type settings struct {
@@ -29,11 +57,8 @@ type settings struct {
 	// Quality is the level of the streams: standard, higher, exhigh,
 	// lossless or hires.
 	Quality string `json:"quality"`
-	// FnTranscodeMode says when Feiniu should make an MP3 stream.
-	FnTranscodeMode fnmusic.TranscodeMode `json:"fnTranscodeMode,omitempty"`
-	// FnTranscodeBitrate is the Feiniu MP3 rate in kilobits per second; zero
-	// keeps the service default.
-	FnTranscodeBitrate int `json:"fnTranscodeBitrate,omitempty"`
+	// FnMusic keeps Feiniu-only settings in its own platform namespace.
+	FnMusic fnmusicSettings `json:"fnmusic,omitempty"`
 	// Appearance is light, dark, or system to follow the system.
 	Appearance string `json:"appearance"`
 	// Smoke makes the progress bars comets trailing smoke as music plays,
@@ -66,22 +91,46 @@ type settings struct {
 	// Captions writes down episodes as they play, for their captions,
 	// once the listener has downloaded the model.
 	Captions bool `json:"captions"`
+	// DesktopLyricsLocked remembers whether desktop lyrics should start
+	// click-through when shown.
+	DesktopLyricsLocked bool `json:"desktopLyricsLocked,omitempty"`
+	// DesktopLyrics keeps the desktop lyric window's style and position.
+	DesktopLyrics *desktopLyricsSettings `json:"desktopLyrics,omitempty"`
 	// CacheMB is how many megabytes the songs kept on disk may take; 0
 	// keeps none.
 	CacheMB int `json:"cacheMB"`
 	// SearchHistory keeps submitted keywords, most recent first.
 	SearchHistory []string `json:"searchHistory,omitempty"`
-	// Source is the music the app shows: sourceNetease or sourceFn.
-	Source string `json:"source"`
-	// Fn is how to reach the listener's Feiniu music service, once they
-	// connected it.
-	Fn fnmusic.Config `json:"fn"`
+	// Source is the active platform: sourceNetease or sourceFn. It is persisted
+	// as platform while retaining the existing runtime name for now.
+	Source string `json:"platform"`
+	// These aliases keep the current player and connection code small while
+	// the platform-specific settings page is being split out. They are never
+	// serialized; save/load synchronize them with FnMusic.
+	Fn                 fnmusic.Config        `json:"-"`
+	FnTranscodeMode    fnmusic.TranscodeMode `json:"-"`
+	FnTranscodeBitrate int                   `json:"-"`
 
 	path string // where they were loaded from, and are saved to
 }
 
 func defaultSettings() settings {
-	return settings{Source: sourceNetease, NotchActivity: true, Quality: "exhigh", FnTranscodeMode: fnmusic.TranscodeAuto, Appearance: "system", Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, Captions: true}
+	s := settings{Source: sourceNetease, NotchActivity: true, Quality: "exhigh", Appearance: "system", Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, Captions: true}
+	s.FnMusic.TranscodeMode = fnmusic.TranscodeAuto
+	s.syncFnMusic()
+	return s
+}
+
+func (s *settings) syncFnMusic() {
+	s.Fn = s.FnMusic.Config
+	s.FnTranscodeMode = s.FnMusic.TranscodeMode
+	s.FnTranscodeBitrate = s.FnMusic.TranscodeBitrate
+}
+
+func (s *settings) syncFnMusicAliases() {
+	s.FnMusic.Config = s.Fn
+	s.FnMusic.TranscodeMode = s.FnTranscodeMode
+	s.FnMusic.TranscodeBitrate = s.FnTranscodeBitrate
 }
 
 func settingsPath() (string, error) {
@@ -138,18 +187,23 @@ func loadSettings() settings {
 		}
 		s.path = path
 	}
-	if s.FnTranscodeMode != fnmusic.TranscodeAuto && s.FnTranscodeMode != fnmusic.TranscodeNative && s.FnTranscodeMode != fnmusic.TranscodeAlways {
-		s.FnTranscodeMode = fnmusic.TranscodeAuto
+	if s.Source == "" {
+		s.Source = sourceNetease
 	}
-	if !fnmusic.ValidTranscodeBitrate(s.FnTranscodeBitrate) {
-		s.FnTranscodeBitrate = 0
+	if s.FnMusic.TranscodeMode != fnmusic.TranscodeAuto && s.FnMusic.TranscodeMode != fnmusic.TranscodeNative && s.FnMusic.TranscodeMode != fnmusic.TranscodeAlways {
+		s.FnMusic.TranscodeMode = fnmusic.TranscodeAuto
 	}
+	if !fnmusic.ValidTranscodeBitrate(s.FnMusic.TranscodeBitrate) {
+		s.FnMusic.TranscodeBitrate = 0
+	}
+	s.syncFnMusic()
 	return s
 }
 
 // save keeps the settings where they were loaded from; defaults that were
 // never loaded, as in tests, are not saved.
 func (s settings) save() error {
+	s.syncFnMusicAliases()
 	path := s.path
 	if path == "" {
 		return nil
