@@ -11,19 +11,6 @@ import (
 	"netease-music-mygo/internal/fnmusic"
 )
 
-// desktopLyricsSettings are the desktop lyric window's persistent choices.
-// A pointer in settings keeps older settings files compatible: missing
-// desktop-lyrics data gets the current defaults on first use.
-type desktopLyricsSettings struct {
-	Locked          bool    `json:"locked,omitempty"`
-	ShowTranslation bool    `json:"showTranslation"`
-	FontSize        float32 `json:"fontSize,omitempty"`
-	Color           int     `json:"color,omitempty"`
-	X               int     `json:"x,omitempty"`
-	Y               int     `json:"y,omitempty"`
-	PositionSet     bool    `json:"positionSet,omitempty"`
-}
-
 // fnmusicSettings is persisted separately from the upstream NetEase
 // settings. The active platform selects which settings page and provider are
 // used; NetEase's existing top-level fields stay unchanged for compatibility
@@ -33,10 +20,6 @@ type fnmusicSettings struct {
 	TranscodeMode    fnmusic.TranscodeMode `json:"transcodeMode,omitempty"`
 	TranscodeBitrate int                   `json:"transcodeBitrate,omitempty"`
 	LibrarySort      string                `json:"librarySort,omitempty"`
-}
-
-func defaultDesktopLyricsSettings() desktopLyricsSettings {
-	return desktopLyricsSettings{ShowTranslation: true, FontSize: 30}
 }
 
 // settings are the listener's choices, kept in settings.json in the user
@@ -91,11 +74,6 @@ type settings struct {
 	// Captions writes down episodes as they play, for their captions,
 	// once the listener has downloaded the model.
 	Captions bool `json:"captions"`
-	// DesktopLyricsLocked remembers whether desktop lyrics should start
-	// click-through when shown.
-	DesktopLyricsLocked bool `json:"desktopLyricsLocked,omitempty"`
-	// DesktopLyrics keeps the desktop lyric window's style and position.
-	DesktopLyrics *desktopLyricsSettings `json:"desktopLyrics,omitempty"`
 	// CacheMB is how many megabytes the songs kept on disk may take; 0
 	// keeps none.
 	CacheMB int `json:"cacheMB"`
