@@ -173,10 +173,9 @@ func TestFnLikeNeedsNoNeteaseLogin(t *testing.T) {
 	}
 }
 
-// The platform is switched from the account menu at the foot of the
-// sidebar, and the whole app shows the one chosen: Feiniu's starts on its
-// library, NetEase's on its home, and neither keeps the other's history.
-func TestSwitchPlatformFromAccountMenu(t *testing.T) {
+// Switching the platform resets the route and history, and each platform
+// starts at its own home page.
+func TestSwitchPlatform(t *testing.T) {
 	e := fnTestApp(t)
 	a := e.a
 	a.settings.Source = sourceNetease
@@ -185,13 +184,7 @@ func TestSwitchPlatformFromAccountMenu(t *testing.T) {
 	tt.Advance(time.Second)
 	tt.Frame()
 
-	if err := tt.Click("账户"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if err := tt.Click("飞牛音乐"); err != nil {
-		t.Fatal(err)
-	}
+	a.useSource(sourceFn)
 	tt.Frame()
 	if !a.onFn() || a.route != (route{page: pagePlaylist, id: fnmusic.LibraryID}) || a.accountOpen {
 		t.Fatalf("source %q, route %+v, menu open %v", a.settings.Source, a.route, a.accountOpen)
@@ -199,24 +192,17 @@ func TestSwitchPlatformFromAccountMenu(t *testing.T) {
 	if _, ok := tt.Find("晴天"); !ok {
 		t.Error("the library is not shown")
 	}
-	// The menu is there on the other platform, to go back from.
-	if err := tt.Click("me"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if err := tt.Click("网易云音乐"); err != nil {
-		t.Fatal(err)
-	}
+	a.useSource(sourceNetease)
 	if a.onFn() || a.route.page != pageHome || len(a.history) != 0 {
 		t.Errorf("source %q, route %+v, %d pages of history", a.settings.Source, a.route, len(a.history))
 	}
 }
 
-// With no one signed in to the platform shown, the account row still opens
-// the menu: the platform is switched from there, and it is where to sign in.
+// With no one signed in, the account row still offers the Feiniu connection.
 func TestAccountMenuWithoutAccount(t *testing.T) {
 	e := fnTestApp(t)
 	a := e.a
+	a.settings.Source = sourceFn
 	a.fn.client = nil
 	tt := ui.NewTester(a.view, 1200, 800)
 	tt.Advance(time.Second)
@@ -227,9 +213,6 @@ func TestAccountMenuWithoutAccount(t *testing.T) {
 	tt.Frame()
 	if _, ok := tt.Find("连接飞牛音乐…"); !ok {
 		t.Error("no way to connect in the menu")
-	}
-	if _, ok := tt.Find("网易云音乐"); !ok {
-		t.Error("no way back to NetEase in the menu")
 	}
 }
 

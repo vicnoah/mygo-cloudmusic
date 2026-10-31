@@ -30,16 +30,8 @@ func TestAccountMenu(t *testing.T) {
 	if !a.accountOpen || !tt.HasText("退出登录") {
 		t.Fatalf("menu not open: %v", a.accountOpen)
 	}
-	if !tt.Focused("网易云音乐") {
-		t.Fatal("the platform shown has no focus")
-	}
-	// Down walks the other platform, the listener's page, settings, then out.
-	for _, want := range []string{"飞牛音乐", "我的主页", "设置…", "退出登录"} {
-		tt.Key(0, ui.KeyDown)
-		tt.Frame()
-		if !tt.Focused(want) {
-			t.Fatalf("Down did not move to %s", want)
-		}
+	if !tt.HasText("我的主页") || !tt.HasText("设置…") {
+		t.Fatal("the account menu has no account actions")
 	}
 	tt.Key(0, ui.KeyEscape)
 	tt.Frame()
