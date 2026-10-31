@@ -26,11 +26,35 @@ type State struct {
 	liked     map[int64]bool
 	likeBusy  map[int64]bool
 	roamID    string
+	catalog   *Catalog
 }
 
 // NewState returns an empty disconnected platform session.
 func NewState() *State {
-	return &State{liked: make(map[int64]bool), likeBusy: make(map[int64]bool)}
+	s := &State{liked: make(map[int64]bool), likeBusy: make(map[int64]bool)}
+	s.catalog = NewCatalog(s, nil)
+	return s
+}
+
+// Catalog returns the platform-owned lazy catalog state.
+func (s *State) Catalog() *Catalog {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.catalog == nil {
+		s.catalog = NewCatalog(s, nil)
+	}
+	return s.catalog
+}
+
+// SetPost supplies the owner goroutine used by catalog page completions.
+func (s *State) SetPost(post func(func())) {
+	if s == nil {
+		return
+	}
+	s.Catalog().Post = post
 }
 
 // Client returns the current backend client, if connected.
@@ -92,6 +116,7 @@ func (s *State) Attach(client *backend.Client) error {
 	s.err = nil
 	s.playlists = nil
 	s.roamID = ""
+	s.catalog = NewCatalog(s, nil)
 	if s.liked == nil {
 		s.liked = make(map[int64]bool)
 	}
@@ -113,6 +138,7 @@ func (s *State) Detach() *backend.Client {
 	s.client, s.provider, s.err = nil, nil, nil
 	s.playlists = nil
 	s.roamID = ""
+	s.catalog = NewCatalog(s, nil)
 	s.liked = make(map[int64]bool)
 	s.likeBusy = make(map[int64]bool)
 	s.mu.Unlock()
