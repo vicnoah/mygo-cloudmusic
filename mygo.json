@@ -2,7 +2,7 @@
   "name": "MyGo 云音乐",
   "identifier": "dev.egoist.cloudmusic",
   "slug": "mygo-cloudmusic",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "out": "build",
   "updates": {
     "publicKey": "j48t3n7ieAE6ZSiAqdQVpQWSdlsg1BPoxwym3bXqXJ8=",
