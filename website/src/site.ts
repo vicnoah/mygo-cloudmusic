@@ -1,4 +1,4 @@
-export const repo = 'https://github.com/egoist/mygo-cloudmusic'
+export const repo = 'https://github.com/vicnoah/mygo-cloudmusic'
 
 export type Asset = { name: string; size: number; browser_download_url: string }
 export type Release = { tag_name: string; published_at: string; assets: Asset[] }
