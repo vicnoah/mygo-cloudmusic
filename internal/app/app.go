@@ -64,6 +64,7 @@ type app struct {
 
 	profile      *netease.Profile
 	mine, saved  []netease.Playlist // the listener's playlists: made, and saved
+	savingPl     map[int64]bool     // the playlists whose saving or its end is on its way
 	recPlaylists []netease.Playlist // the day's playlists picked for the listener
 	login        loginState
 	accountOpen  bool           // the dropdown of the account row shows
@@ -153,6 +154,8 @@ type app struct {
 	cacheUsed   int64 // the bytes the song cache takes, -1 until measured
 	updates     bool  // the update plugin is used (useUpdater)
 
+	appPlatformState
+
 	restored     bool   // playback picked up where it was left
 	savedSession string // the session as last kept
 	sessionDue   bool   // a save of the session is due
@@ -233,6 +236,11 @@ func Run() error {
 		}
 		a.volume = a.settings.Volume
 		a.pl.SetVolume(a.volume)
+		// Resolve the selected platform before the first window frame. Otherwise
+		// a configured platform briefly renders the upstream home and then
+		// switches during startup.
+		a.initPlatformState()
+		a.configurePlatformPlayer()
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:         mygo.App.Name(),
 			Width:         1180,
@@ -252,7 +260,7 @@ func Run() error {
 		})
 		a.newDesktopLyrics()
 		a.setMenu()
-		a.boot()
+		a.startPlatform()
 		// The notch player is macOS's, over its menu bar: elsewhere it would
 		// hang at the top of the screen as a black box.
 		if runtime.GOOS == "darwin" {
