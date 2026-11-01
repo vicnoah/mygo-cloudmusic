@@ -1,5 +1,10 @@
 # Releasing
 
+This fork publishes releases at `vicnoah/mygo-cloudmusic`. Windows builds are
+unsigned; if the fork has no macOS certificate secrets, macOS builds are also
+unsigned. Update manifests are signed when `MYGO_UPDATER_PRIVATE_KEY` is
+available.
+
 1. Commit pending work, bring the fork's `release` branch up to date, and run `go test ./internal/...`. The release branch is the only branch used for our published builds:
 
    ```bash
@@ -19,7 +24,7 @@
    If `release` is rejected, pull again, add what came in to the changelog, amend the version commit, test, and push `release` again before tagging. If a tag went up on the wrong commit anyway, cancel its run, then delete the tag and the draft it made before tagging again:
 
    ```bash
-   git push origin :refs/tags/v0.1.8
+   git push fork :refs/tags/v0.2.4
    gh release delete v0.2.4 --repo vicnoah/mygo-cloudmusic --yes
    ```
 
