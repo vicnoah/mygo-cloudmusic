@@ -55,6 +55,13 @@ type PlatformSettings struct {
 	TranscodeBitrate int               `json:"transcodeBitrate,omitempty"`
 	LibrarySort      string            `json:"librarySort,omitempty"`
 	Sorts            map[string]string `json:"sorts,omitempty"`
+	// Quality, Normalize, HotComments and SearchHistory are provider playback
+	// preferences, kept in the provider's own namespace. Optional values fall
+	// back to the provider's defaults, not to the shared ones.
+	Quality       string   `json:"quality,omitempty"`
+	Normalize     *bool    `json:"normalize,omitempty"`
+	HotComments   bool     `json:"hotComments,omitempty"`
+	SearchHistory []string `json:"searchHistory,omitempty"`
 }
 
 // Runtime is the lifecycle seam for a platform account. It contains no
@@ -105,6 +112,19 @@ type Adapter interface {
 	Favorite(context.Context, *netease.Track, bool) error
 }
 
+// Accent lets a platform brand the shared chrome with its own colour.
+type Accent interface {
+	AccentColor() (ui.Color, ui.Color)
+}
+
+// CommentSource is optional: a platform that serves comments for its own
+// tracks implements it, and the root app stops asking NetEase. Read-only
+// sources leave liking to the shared NetEase path by staying unimplemented.
+type CommentSource interface {
+	CommentThread(*netease.Track) string
+	Comments(string, int, int) (*netease.Comments, error)
+}
+
 // Info is the provider-neutral identity shown by shared platform controls.
 // The root app uses it to enumerate and validate adapters; it never needs to
 // name a concrete provider package or compare a provider-specific constant.
@@ -126,6 +146,13 @@ type Route struct {
 
 type PlayerPort interface {
 	Current() *netease.Track
+	Playing() bool
+	Loading() bool
+	Err() string
+	TogglePlay()
+	Next()
+	Queue() []netease.Track
+	PlayOrder() ([]int, int)
 	PlayQueue([]netease.Track, int)
 	AppendQueue([]netease.Track)
 	PlayList([]netease.Track, int, func(func([]netease.Track)))
@@ -177,6 +204,7 @@ type TrackView struct {
 	Liked          func(int64) bool
 	Favorite       func(netease.Track, bool)
 	ShowAlbum      bool
+	Footer         func(*ui.Context)
 }
 
 type SearchView struct {
@@ -209,10 +237,16 @@ type CardView struct {
 	OnPlay         func(int64)
 	// Meta reserves the card's secondary line in its loading skeleton.
 	Meta bool
+	// Round draws an artist's round photo over the name, with no play.
+	Round bool
+	// NoPlay leaves the card to opening only, as album grids do.
+	NoPlay bool
 	// Placeholder is shown when a card has no cover at all.
 	Placeholder *ui.SVG
 	// Art draws the cover of a card that has none, into its square.
 	Art func(p *ui.Painter, r ui.Rect, card *netease.Playlist, radius float32)
+	// Footer draws under the cards, for pages that load more.
+	Footer func(*ui.Context)
 }
 
 type SortChoice struct{ Value, Label string }
@@ -252,11 +286,23 @@ type Host interface {
 	Bone(c *ui.Context, radius float32) ui.Element
 	TextBone(c *ui.Context, size, lineHeight float32) ui.Element
 	Cover(*ui.Context, string, float32, float32) ui.Element
+	// CoverBitmap is a cover's bitmap, nil until it loads, for drawing it
+	// inside a record's label.
+	CoverBitmap(string) *ui.Bitmap
+	// ArtworkBackdrop is a cover's blurred bitmap, for large page backdrops.
+	// It is nil until the cover loads.
+	ArtworkBackdrop(string) *ui.Bitmap
+	// ArtworkColors are the deep, rich and glow tones a large backdrop
+	// paints from the cover's dominant colour.
+	ArtworkColors(string) (ui.Color, ui.Color, ui.Color, bool)
 	PillButton(*ui.Context, string, *ui.SVG, string, bool) ui.Element
 	MoreButton(*ui.Context, string, func(*ui.Menu)) ui.Element
 	Segmented(*ui.Context, string, *int, ...string) bool
-	AccountRow(*ui.Context, *ui.SVG, string, string, *bool, []AccountAction)
+	AccountRow(*ui.Context, *ui.SVG, string, string, string, *bool, []AccountAction)
 	CopyText(string)
+	// SearchHistory is the shared search history, newest first.
+	SearchHistory() []string
+	RememberSearch(string)
 	SwitchPlatform(coreplatform.ID)
 	SharedSettings(*ui.Context)
 }

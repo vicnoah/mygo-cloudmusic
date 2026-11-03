@@ -163,6 +163,48 @@ func (h platformHost) PlatformSearchField(c *ui.Context, placeholder string, sub
 	})
 }
 
+func (h platformHost) SearchHistory() []string {
+	if h.a == nil {
+		return nil
+	}
+	switch h.a.platformID {
+	case platform.QQMusicID:
+		return append([]string(nil), h.a.settings.QQMusic.SearchHistory...)
+	case platform.FnmusicID:
+		return append([]string(nil), h.a.settings.FnMusic.SearchHistory...)
+	}
+	return append([]string(nil), h.a.settings.SearchHistory...)
+}
+
+func (h platformHost) RememberSearch(q string) {
+	if h.a == nil {
+		return
+	}
+	var history []string
+	switch h.a.platformID {
+	case platform.QQMusicID:
+		history = h.a.settings.QQMusic.SearchHistory
+	case platform.FnmusicID:
+		history = h.a.settings.FnMusic.SearchHistory
+	default:
+		h.a.rememberSearch(q)
+		return
+	}
+	out := []string{q}
+	for _, past := range history {
+		if past != q && len(out) < 20 {
+			out = append(out, past)
+		}
+	}
+	switch h.a.platformID {
+	case platform.QQMusicID:
+		h.a.settings.QQMusic.SearchHistory = out
+	case platform.FnmusicID:
+		h.a.settings.FnMusic.SearchHistory = out
+	}
+	h.a.settings.save()
+}
+
 func (h platformHost) SwitchPlatform(id platform.ID) { h.a.setPlatform(id) }
 
 func (h platformHost) CurrentPlatform() platform.ID {
@@ -212,19 +254,20 @@ func (h platformHost) SharedSettings(c *ui.Context) {
 	if cap.Quality || cap.Normalize || cap.Comments {
 		group("播放", func() {
 			if cap.Quality {
+				levels := a.platformQualityLevels()
 				row("shared-quality", "音质", "下一首歌曲开始生效", func() {
-					labels := make([]string, len(qualityLevels))
-					chosen := s.Quality
-					for i, q := range qualityLevels {
+					labels := make([]string, len(levels))
+					chosen := a.qualityLevel()
+					for i, q := range levels {
 						labels[i] = q.label
-						if q.level == s.Quality {
+						if q.level == a.qualityLevel() {
 							chosen = q.label
 						}
 					}
 					if ui.Select(c.Key("shared-quality-select"), &chosen, labels).Label("音质").Width(150).Changed() {
-						for _, q := range qualityLevels {
+						for _, q := range levels {
 							if q.label == chosen {
-								s.Quality = q.level
+								a.setQualityLevel(q.level)
 							}
 						}
 						a.changed()
@@ -233,7 +276,9 @@ func (h platformHost) SharedSettings(c *ui.Context) {
 			}
 			if cap.Normalize {
 				row("shared-normalize", "音量均衡", "让不同歌曲听起来音量相近", func() {
-					if ui.Switch(c.Key("shared-normalize-switch"), &s.Normalize).Label("音量均衡").Changed() {
+					on := a.normalizeEnabled()
+					if ui.Switch(c.Key("shared-normalize-switch"), &on).Label("音量均衡").Changed() {
+						a.setNormalize(on)
 						a.pl.SetVolume(a.volume)
 						a.changed()
 					}
@@ -241,7 +286,9 @@ func (h platformHost) SharedSettings(c *ui.Context) {
 			}
 			if cap.Comments {
 				row("shared-hot-comments", "间奏时显示热评", "歌词空白处显示热门评论", func() {
-					if ui.Switch(c.Key("shared-hot-comments-switch"), &s.HotComments).Label("间奏时显示热评").Changed() {
+					on := a.hotCommentsEnabled()
+					if ui.Switch(c.Key("shared-hot-comments-switch"), &on).Label("间奏时显示热评").Changed() {
+						a.setHotComments(on)
 						a.changed()
 					}
 				})
@@ -446,6 +493,35 @@ func (h platformHost) Cover(c *ui.Context, url string, size, radius float32) ui.
 	return h.a.cover(c, url, px, size, radius)
 }
 
+func (h platformHost) CoverBitmap(url string) *ui.Bitmap {
+	if h.a == nil || url == "" {
+		return nil
+	}
+	return bitmap(h.a.art.get(netease.Sized(url, 240), false))
+}
+
+func (h platformHost) ArtworkBackdrop(url string) *ui.Bitmap {
+	if h.a == nil || url == "" {
+		return nil
+	}
+	if art := h.a.art.get(netease.Sized(url, 600), true); art != nil {
+		return art.backdrop
+	}
+	return nil
+}
+
+func (h platformHost) ArtworkColors(url string) (ui.Color, ui.Color, ui.Color, bool) {
+	if h.a == nil || url == "" {
+		return ui.Color{}, ui.Color{}, ui.Color{}, false
+	}
+	art := h.a.art.get(netease.Sized(url, 600), false)
+	if art == nil || art.failed {
+		return ui.Color{}, ui.Color{}, ui.Color{}, false
+	}
+	deep, rich, glow := dailyColors(art)
+	return deep, rich, glow, true
+}
+
 func (h platformHost) PillButton(c *ui.Context, key string, icon *ui.SVG, label string, primary bool) ui.Element {
 	p := h.a.pal
 	bg, fg := p.hover.Over(p.bg), p.text
@@ -468,7 +544,7 @@ func (h platformHost) Segmented(c *ui.Context, key string, at *int, labels ...st
 // labels and actions to the active platform. This keeps provider account
 // menus out of the root app without duplicating popover geometry and focus
 // behavior.
-func (h platformHost) AccountRow(c *ui.Context, accountIcon *ui.SVG, username, status string, open *bool, actions []appplatform.AccountAction) {
+func (h platformHost) AccountRow(c *ui.Context, accountIcon *ui.SVG, avatar, username, status string, open *bool, actions []appplatform.AccountAction) {
 	if h.a == nil {
 		return
 	}
@@ -482,12 +558,18 @@ func (h platformHost) AccountRow(c *ui.Context, accountIcon *ui.SVG, username, s
 		b.Background(p.hover)
 	}
 	b.Expanded(*open).Children(func() {
-		ui.Box(c).Size(26, 26).Radius(13).Background(p.press).Center().Children(func() {
-			ui.Icon(c, accountIcon).Size(14, 14).TextColor(p.muted)
-		})
+		if avatar != "" {
+			h.a.avatar(c, avatar, 26, p.press)
+		} else {
+			ui.Box(c).Size(26, 26).Radius(13).Background(p.press).Center().Children(func() {
+				ui.Icon(c, accountIcon).Size(14, 14).TextColor(p.muted)
+			})
+		}
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
 			ui.Text(c, username).FontSize(13).FontWeight(600).SingleLine().Shrink(1).MinWidth(0)
-			ui.Text(c, status).FontSize(11.5).TextColor(p.faint).SingleLine().Shrink(1).MinWidth(0)
+			if status != "" {
+				ui.Text(c, status).FontSize(11.5).TextColor(p.faint).SingleLine().Shrink(1).MinWidth(0)
+			}
 		})
 		ui.Icon(c, iconUpDown).Size(13, 13).TextColor(p.faint)
 	})
@@ -562,6 +644,10 @@ func (h platformHost) RenderTracks(c *ui.Context, l *appplatform.TrackList, view
 		play = func(int) {}
 	}
 
+	var footer []func(*ui.Context)
+	if view.Footer != nil {
+		footer = append(footer, view.Footer)
+	}
 	h.a.trackRowsProviderOptions(c, total, get, play, true, trackRowsOptions{
 		Menu:      view.Menu,
 		Liked:     view.Liked,
@@ -573,7 +659,7 @@ func (h platformHost) RenderTracks(c *ui.Context, l *appplatform.TrackList, view
 		} else {
 			h.a.heading(c, view.Title, view.Sub)
 		}
-	})
+	}, footer...)
 }
 
 // platformHeroReady gates only the detail cover. A slow thumbnail must never
@@ -665,7 +751,15 @@ func (h platformHost) RenderCards(c *ui.Context, p *paging.Pager[netease.Playlis
 		r := home.Route()
 		routeKey = fmt.Sprintf("platform-cards-%s-%d-%s", r.Page, r.ID, r.Query)
 	}
-	ui.List(c.Key(routeKey), &h.a.platformCardList, pages+1, func(row int) {
+	rows := pages + 1
+	if view.Footer != nil {
+		rows++
+	}
+	ui.List(c.Key(routeKey), &h.a.platformCardList, rows, func(row int) {
+		if view.Footer != nil && row == rows-1 {
+			ui.Column(c).Padding(18, 0, 32, 0).Children(func() { view.Footer(c) })
+			return
+		}
 		if row == 0 {
 			ui.Column(c).Children(func() {
 				h.a.startMark(c)
@@ -710,13 +804,20 @@ func (h platformHost) RenderCards(c *ui.Context, p *paging.Pager[netease.Playlis
 					}
 					key := c.Key(fmt.Sprintf("platform-card-%d", pl.ID))
 					var open bool
-					if pl.Cover() == "" && renderArt != nil {
-						card := *pl
-						open = h.a.drawnCard(key, pl.Name, pl.UpdateFreq, func(p *ui.Painter, r ui.Rect, radius float32) {
-							renderArt(p, r, &card, radius)
-						}, play)
-					} else {
-						open = h.a.coverCard(key, pl.Name, pl.Cover(), pl.PlayCount, pl.UpdateFreq, play)
+					switch {
+					case view.Round:
+						open = h.roundCard(key, pl, card)
+					case view.NoPlay:
+						open = h.plainCard(key, pl, card)
+					default:
+						if pl.Cover() == "" && renderArt != nil {
+							card := *pl
+							open = h.a.drawnCard(key, pl.Name, pl.UpdateFreq, func(p *ui.Painter, r ui.Rect, radius float32) {
+								renderArt(p, r, &card, radius)
+							}, play)
+						} else {
+							open = h.a.coverCard(key, pl.Name, pl.Cover(), pl.PlayCount, pl.UpdateFreq, play)
+						}
 					}
 					if open && view.OnOpen != nil {
 						view.OnOpen(pl.ID)
@@ -728,6 +829,47 @@ func (h platformHost) RenderCards(c *ui.Context, p *paging.Pager[netease.Playlis
 			defer h.a.endMark(c)
 		}
 	}).Grow(1).Padding(top+pageGap, pagePad, bottom+48, pagePad).ScrollbarInsets(top, 0, bottom, 0)
+}
+
+// roundCard is an artist's photo, round over their name, opening their page.
+func (h platformHost) roundCard(c *ui.Context, pl *netease.Playlist, size float32) bool {
+	p := h.a.pal
+	b := ui.ButtonBase(c).Column().Gap(10).AlignItems(ui.Stretch).FocusRing(false).Label(pl.Name)
+	hovered := b.Hovered()
+	b.Children(func() {
+		art := ui.Box(c).AspectRatio(1).Radius(size / 2)
+		if hovered {
+			art.AnimatePose(ui.Pose{Y: -3}, ui.Snappy)
+			art.Shadow(0, 12, 28, -6, p.cardShade)
+		} else {
+			art.Shadow(0, 2, 8, -2, p.cardShade)
+		}
+		art.Children(func() { h.Cover(c, pl.Cover(), size, size/2) })
+		ui.Text(c, pl.Name).FontSize(13).FontWeight(500).SingleLine()
+	})
+	return b.Clicked()
+}
+
+// plainCard is a cover over its name and line, with no play: an album grid.
+func (h platformHost) plainCard(c *ui.Context, pl *netease.Playlist, size float32) bool {
+	p := h.a.pal
+	b := ui.ButtonBase(c).Column().Gap(10).AlignItems(ui.Stretch).FocusRing(false).Label(pl.Name)
+	hovered := b.Hovered()
+	b.Children(func() {
+		art := ui.Box(c).AspectRatio(1).Radius(10)
+		if hovered {
+			art.AnimatePose(ui.Pose{Y: -3}, ui.Snappy)
+			art.Shadow(0, 12, 28, -6, p.cardShade)
+		} else {
+			art.Shadow(0, 2, 8, -2, p.cardShade)
+		}
+		art.Children(func() { h.Cover(c, pl.Cover(), size, 10) })
+		ui.Text(c, pl.Name).FontSize(13).FontWeight(500).MaxLines(2).LineHeight(1.35)
+		if pl.UpdateFreq != "" {
+			ui.Text(c, pl.UpdateFreq).FontSize(12).TextColor(p.muted).SingleLine().Margin(-6, 0, 0, 0)
+		}
+	})
+	return b.Clicked()
 }
 
 func (h platformHost) TrackRow(c *ui.Context, i int, tr *netease.Track, view appplatform.TrackView) {
@@ -898,6 +1040,13 @@ func (h platformHost) prefetchCardArtwork(p *paging.Pager[netease.Playlist], c *
 type sharedPlayer struct {
 	p interface {
 		Current() *netease.Track
+		Playing() bool
+		Loading() bool
+		Err() string
+		TogglePlay()
+		Next()
+		Queue() []netease.Track
+		PlayOrder() ([]int, int)
 		PlayQueue([]netease.Track, int)
 		AppendQueue([]netease.Track)
 		PlayList([]netease.Track, int, func(func([]netease.Track)))
@@ -910,6 +1059,13 @@ type sharedPlayer struct {
 }
 
 func (p sharedPlayer) Current() *netease.Track            { return p.p.Current() }
+func (p sharedPlayer) Playing() bool                      { return p.p.Playing() }
+func (p sharedPlayer) Loading() bool                      { return p.p.Loading() }
+func (p sharedPlayer) Err() string                        { return p.p.Err() }
+func (p sharedPlayer) TogglePlay()                        { p.p.TogglePlay() }
+func (p sharedPlayer) Next()                              { p.p.Next() }
+func (p sharedPlayer) Queue() []netease.Track             { return p.p.Queue() }
+func (p sharedPlayer) PlayOrder() ([]int, int)            { return p.p.PlayOrder() }
 func (p sharedPlayer) PlayQueue(t []netease.Track, i int) { p.p.PlayQueue(t, i) }
 func (p sharedPlayer) AppendQueue(t []netease.Track)      { p.p.AppendQueue(t) }
 func (p sharedPlayer) PlayList(t []netease.Track, i int, f func(func([]netease.Track))) {
