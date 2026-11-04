@@ -5,6 +5,7 @@ import (
 	appfnmusic "netease-music-mygo/internal/app/platform/fnmusic"
 	appqqmusic "netease-music-mygo/internal/app/platform/qqmusic"
 	appsubsonic "netease-music-mygo/internal/app/platform/subsonic"
+	appsongloft "netease-music-mygo/internal/app/platform/songloft"
 	"netease-music-mygo/internal/platform"
 	backendsubsonic "netease-music-mygo/internal/platform/subsonic"
 )
@@ -31,4 +32,5 @@ func newPlatformAdapters(a *app) {
 	a.platforms[platform.JellyfinID] = appsubsonic.NewAdapter(platformHost{a: a}, backendsubsonic.ProfileJellyfin, &a.settings.Jellyfin, func() { _ = a.settings.save() })
 	a.platforms[platform.GonicID] = appsubsonic.NewAdapter(platformHost{a: a}, backendsubsonic.ProfileGonic, &a.settings.Gonic, func() { _ = a.settings.save() })
 	a.platforms[platform.SubsonicID] = appsubsonic.NewAdapter(platformHost{a: a}, backendsubsonic.ProfileSubsonic, &a.settings.Subsonic, func() { _ = a.settings.save() })
+	a.platforms[platform.SongloftID] = appsongloft.NewAdapter(platformHost{a: a}, &a.settings.Songloft, func() { _ = a.settings.save() })
 }

@@ -30,6 +30,7 @@ func (h *Home) Sidebar(c *ui.Context) {
 			h.host.NavItem(c, iconAlbum, "专辑", Route{Page: PageAlbums})
 			h.host.NavItem(c, iconUser, "歌手", Route{Page: PageArtists})
 			h.host.NavItem(c, iconHeart, "我喜欢", Route{Page: PagePlaylist, ID: backend.FavoritesID})
+			h.host.NavItem(c, iconClock, "最近播放", Route{Page: PagePlaylist, ID: backend.RecentID})
 			h.host.NavItem(c, iconFolder, "文件夹", Route{Page: PageFolders})
 		}
 

@@ -32,6 +32,8 @@ const (
 	GonicID ID = "gonic"
 	// SubsonicID identifies a generic Subsonic/OpenSubsonic compatible platform.
 	SubsonicID ID = "subsonic"
+	// SongloftID identifies the Songloft music platform.
+	SongloftID ID = "songloft"
 )
 
 // ListKind describes a list a provider can page through. The values are

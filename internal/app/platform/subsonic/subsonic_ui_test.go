@@ -17,8 +17,8 @@ func TestSubsonicRuntimeSettings(t *testing.T) {
 	rt := NewRuntime(state, settings)
 
 	want := appplatform.ConnectionConfig{
-		Address:  "http://172.16.1.10:4533",
-		Username: "wwg",
+		Address:  "http://subsonic.example.com",
+		Username: "testuser",
 		PassHash: "secret123",
 	}
 	rt.SetConfig(want)
@@ -198,5 +198,89 @@ func TestStateAlbumFavorite(t *testing.T) {
 	state.SetAlbumLikedMemory("al-test-1", false)
 	if state.AlbumLiked("al-test-1") {
 		t.Fatalf("expected al-test-1 not to be liked after unliking")
+	}
+}
+
+// Tests that Subsonic RecentStore records played songs up to 200 and supports removal and clear.
+func TestSubsonicRecentStore(t *testing.T) {
+	store := &RecentStore{
+		path: t.TempDir() + "/test_subsonic_recent.json",
+	}
+
+	tr1 := netease.Track{ID: 201, Name: "Sub Song 1"}
+	tr2 := netease.Track{ID: 202, Name: "Sub Song 2"}
+	store.Add(tr1)
+	store.Add(tr2)
+
+	if store.Total() != 2 {
+		t.Fatalf("expected 2 tracks, got %d", store.Total())
+	}
+	tracks, total := store.Slice(0, 10)
+	if total != 2 || len(tracks) != 2 {
+		t.Fatalf("expected slice length 2, got %d", len(tracks))
+	}
+	if tracks[0].ID != 202 || tracks[1].ID != 201 {
+		t.Fatalf("unexpected order: %v, %v", tracks[0].ID, tracks[1].ID)
+	}
+
+	// Move to top
+	store.Add(tr1)
+	tracks, _ = store.Slice(0, 10)
+	if tracks[0].ID != 201 || tracks[1].ID != 202 {
+		t.Fatalf("expected tr1 at top, got %v", tracks[0].ID)
+	}
+
+	// Remove
+	store.Remove(201)
+	if store.Total() != 1 {
+		t.Fatalf("expected 1 track, got %d", store.Total())
+	}
+
+	// Clear
+	store.Clear()
+	if store.Total() != 0 {
+		t.Fatalf("expected 0 tracks, got %d", store.Total())
+	}
+}
+
+// Tests that Catalog resolves recent list for backend.RecentID in Subsonic.
+func TestSubsonicRecentCatalog(t *testing.T) {
+	cat := NewCatalog(NewState(), nil)
+	list := cat.ListForRoute(backend.RecentID, "", "")
+	if list == nil {
+		t.Fatal("expected recent list not nil")
+	}
+	if list.Spec.Kind != ListRecent || list.Name != "最近播放" {
+		t.Fatalf("unexpected recent list: kind=%s, name=%s", list.Spec.Kind, list.Name)
+	}
+}
+
+// Tests that RecentStore uses separate storage files for distinct platform profiles.
+func TestSubsonicProfileRecentFiles(t *testing.T) {
+	navStore := NewRecentStore("navidrome")
+	jelStore := NewRecentStore("jellyfin")
+	gonStore := NewRecentStore("gonic")
+	subStore := NewRecentStore("subsonic")
+
+	if !strings.HasSuffix(navStore.path, "navidrome_recent.json") {
+		t.Fatalf("unexpected navStore path: %s", navStore.path)
+	}
+	if !strings.HasSuffix(jelStore.path, "jellyfin_recent.json") {
+		t.Fatalf("unexpected jelStore path: %s", jelStore.path)
+	}
+	if !strings.HasSuffix(gonStore.path, "gonic_recent.json") {
+		t.Fatalf("unexpected gonStore path: %s", gonStore.path)
+	}
+	if !strings.HasSuffix(subStore.path, "subsonic_recent.json") {
+		t.Fatalf("unexpected subStore path: %s", subStore.path)
+	}
+
+	// Verify catalog initialized with profile state gets corresponding recent file
+	navState := NewState(backend.ProfileNavidrome)
+	if navState.Catalog() == nil || navState.Catalog().Recent == nil {
+		t.Fatalf("expected navState to have catalog and recent store")
+	}
+	if !strings.HasSuffix(navState.Catalog().Recent.path, "navidrome_recent.json") {
+		t.Fatalf("expected navidrome_recent.json, got: %s", navState.Catalog().Recent.path)
 	}
 }

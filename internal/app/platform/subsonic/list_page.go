@@ -35,6 +35,11 @@ func (h *Home) listHeader(c *ui.Context, l *List) {
 				if l.Spec.Kind == ListAlbum {
 					h.albumLikeButton(c, l)
 				}
+				if l.Spec.Kind == ListRecent || l.ID == backend.RecentID {
+					if h.host.PillButton(c, "subsonic-list-clear-recent", iconTrash, "清空", false).Clicked() {
+						h.ClearRecent()
+					}
+				}
 			})
 		})
 	})

@@ -137,3 +137,24 @@ func TestAlbumStarredState(t *testing.T) {
 		t.Fatalf("expected starred count to be invalidated")
 	}
 }
+
+// Tests that formatStructuredLyrics unescapes HTML/XML character entities in line text.
+func TestFormatStructuredLyricsUnescape(t *testing.T) {
+	sl := &gosubsonic.StructuredLyrics{
+		Lines: []gosubsonic.LyricLine{
+			{
+				Start: 10000,
+				Text:  "Don&apos;t say you&quot;re &amp; I&#39;m &lt;fine&gt;",
+			},
+			{
+				Start: 20000,
+				Value: "Tom&nbsp;&amp;&nbsp;Jerry",
+			},
+		},
+	}
+	got := formatStructuredLyrics(sl)
+	want := "[00:10.00]Don't say you\"re & I'm <fine>\n[00:20.00]Tom\u00a0&\u00a0Jerry\n"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

@@ -229,3 +229,39 @@ func (h *Home) cardSkeletonView() CardView {
 		HeaderSkeleton: h.cardsHeaderSkeleton,
 	}
 }
+
+func (h *Home) RecordStarted(tr netease.Track) {
+	if h == nil || h.state == nil {
+		return
+	}
+	if cat := h.state.Catalog(); cat != nil && cat.Recent != nil {
+		cat.Recent.Add(tr)
+		if l := cat.Lists[backend.RecentID]; l != nil {
+			l.Refresh()
+		}
+	}
+}
+
+func (h *Home) RemoveRecent(id int64) {
+	if h == nil || h.state == nil {
+		return
+	}
+	if cat := h.state.Catalog(); cat != nil {
+		cat.RemoveRecent(id)
+	}
+	if h.host != nil {
+		h.host.Invalidate()
+	}
+}
+
+func (h *Home) ClearRecent() {
+	if h == nil || h.state == nil {
+		return
+	}
+	if cat := h.state.Catalog(); cat != nil {
+		cat.ClearRecent()
+	}
+	if h.host != nil {
+		h.host.Invalidate()
+	}
+}
