@@ -1,4 +1,4 @@
-# MyGo 音乐 · MyGo
+# MyGo本地音乐客户端
 
 用 Go 和 [MyGo](https://github.com/egoist/mygo) 写的第三方桌面音乐客户端，原生界面，无 WebView。
 
@@ -68,7 +68,6 @@ go test ./...        # 运行测试
 - [folia-major](https://github.com/chthollyphile/folia-major)：歌词动画效果的参考
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)、[Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) 与 [Silero VAD](https://github.com/snakers4/silero-vad)：本机语音识别
 - [go-subsonic](https://github.com/supersonic-app/go-subsonic)：Subsonic API Go 客户端实现参考
-- 基于 [mygo-cloudmusic](https://github.com/egoist/mygo-cloudmusic) 的平台接缝开发，感谢项目原作者 [egoist](https://github.com/egoist)
 
 ## 许可证
 
