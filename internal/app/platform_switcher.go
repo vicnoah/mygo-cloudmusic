@@ -85,8 +85,12 @@ func platformName(infos []appplatform.Info, id platform.ID) string {
 }
 
 func platformIcon(id platform.ID) *ui.SVG {
-	if id == platform.FnmusicID {
+	switch id {
+	case platform.FnmusicID:
 		return iconRadio
+	case platform.NavidromeID, platform.JellyfinID, platform.GonicID, platform.SubsonicID:
+		return iconHeadset
+	default:
+		return iconNote
 	}
-	return iconNote
 }

@@ -24,6 +24,14 @@ const (
 	FnmusicID ID = "fnmusic"
 	// QQMusicID identifies the QQ Music platform.
 	QQMusicID ID = "qqmusic"
+	// NavidromeID identifies the Navidrome platform (OpenSubsonic).
+	NavidromeID ID = "navidrome"
+	// JellyfinID identifies the Jellyfin platform (Subsonic API).
+	JellyfinID ID = "jellyfin"
+	// GonicID identifies the Gonic platform.
+	GonicID ID = "gonic"
+	// SubsonicID identifies a generic Subsonic/OpenSubsonic compatible platform.
+	SubsonicID ID = "subsonic"
 )
 
 // ListKind describes a list a provider can page through. The values are
@@ -105,6 +113,11 @@ type Connector interface {
 // Liker is an optional capability for platforms with a liked-song list.
 type Liker interface {
 	SetLiked(context.Context, *netease.Track, bool) error
+}
+
+// AlbumLiker is an optional capability for platforms with starred/collected albums.
+type AlbumLiker interface {
+	SetAlbumLiked(context.Context, string, bool) error
 }
 
 // PlaylistEditor is an optional capability for platforms whose playlists can

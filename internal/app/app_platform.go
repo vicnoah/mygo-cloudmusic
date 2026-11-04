@@ -99,9 +99,19 @@ func (a *app) activeRuntime() appplatform.Runtime {
 	return nil
 }
 
+var platformOrder = map[platform.ID]int{
+	platform.NeteaseID:   0,
+	platform.QQMusicID:   1,
+	platform.FnmusicID:   2,
+	platform.NavidromeID: 3,
+	platform.JellyfinID:  4,
+	platform.GonicID:     5,
+	platform.SubsonicID:  6,
+}
+
 // platformInfos returns the identities available to the shared platform
-// selector. NetEase is the upstream shell and therefore has no adapter; all
-// other entries come from the registered adapter seam.
+// selector in the canonical order. NetEase is the upstream shell and therefore
+// has no adapter; all other entries come from the registered adapter seam.
 func (a *app) platformInfos() []appplatform.Info {
 	infos := []appplatform.Info{neteasePlatformInfo()}
 	for _, adapter := range a.platforms {
@@ -114,8 +124,19 @@ func (a *app) platformInfos() []appplatform.Info {
 		}
 		infos = append(infos, info)
 	}
-	others := infos[1:]
-	sort.SliceStable(others, func(i, j int) bool { return others[i].Name < others[j].Name })
+	orderOf := func(id platform.ID) int {
+		if order, ok := platformOrder[id]; ok {
+			return order
+		}
+		return 999
+	}
+	sort.SliceStable(infos, func(i, j int) bool {
+		oi, oj := orderOf(infos[i].ID), orderOf(infos[j].ID)
+		if oi != oj {
+			return oi < oj
+		}
+		return infos[i].Name < infos[j].Name
+	})
 	return infos
 }
 
@@ -133,11 +154,11 @@ func (a *app) platformPage(r route) (appplatform.Route, bool) {
 	}
 	switch r.page {
 	case pageArtist:
-		return appplatform.Route{Page: "artist", ID: r.id}, true
+		return appplatform.Route{Page: "artist", ID: r.id, Kind: "artist"}, true
 	case pageAlbum:
-		return appplatform.Route{Page: "album", ID: r.id}, true
+		return appplatform.Route{Page: "album", ID: r.id, Kind: "album"}, true
 	case pagePlaylist:
-		return appplatform.Route{Page: "playlist", ID: r.id}, true
+		return appplatform.Route{Page: "playlist", ID: r.id, Kind: "playlist"}, true
 	case pageUser:
 		return appplatform.Route{Page: "user", ID: r.id}, true
 	case pageDaily:

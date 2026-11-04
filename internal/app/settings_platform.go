@@ -17,9 +17,13 @@ import (
 // provider-specific values remain neutral seam types; validation and
 // interpretation belong to the provider adapter.
 type platformSettings struct {
-	Platform string                       `json:"platform,omitempty"`
-	FnMusic  appplatform.PlatformSettings `json:"fnmusic,omitempty"`
-	QQMusic  appplatform.PlatformSettings `json:"qqmusic,omitempty"`
+	Platform  string                       `json:"platform,omitempty"`
+	FnMusic   appplatform.PlatformSettings `json:"fnmusic,omitempty"`
+	QQMusic   appplatform.PlatformSettings `json:"qqmusic,omitempty"`
+	Navidrome appplatform.PlatformSettings `json:"navidrome,omitempty"`
+	Jellyfin  appplatform.PlatformSettings `json:"jellyfin,omitempty"`
+	Gonic     appplatform.PlatformSettings `json:"gonic,omitempty"`
+	Subsonic  appplatform.PlatformSettings `json:"subsonic,omitempty"`
 }
 
 // qqQuality keeps only the levels QQ can actually stream.

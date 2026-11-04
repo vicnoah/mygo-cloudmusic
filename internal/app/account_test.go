@@ -54,6 +54,26 @@ func TestAccountMenu(t *testing.T) {
 	}
 }
 
+// Clicking the account row when signed out opens the menu offering settings and login.
+func TestAccountMenuWhenSignedOut(t *testing.T) {
+	a := newTestApp()
+	a.settings = defaultSettings()
+	a.profile = nil
+	tt := ui.NewTester(a.view, 1000, 700)
+	tt.Frame()
+
+	if err := tt.Click("登录"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !a.accountOpen || !tt.HasText("设置…") || !tt.HasText("登录网易云音乐…") {
+		t.Fatalf("menu not open with settings: open=%v hasSettings=%v", a.accountOpen, tt.HasText("设置…"))
+	}
+	if !tt.Focused("设置…") {
+		t.Fatal("the settings item has no focus")
+	}
+}
+
 // 我的主页 in the account menu opens the page of who is signed in and puts
 // the menu away.
 func TestAccountMenuOpensOwnPage(t *testing.T) {
