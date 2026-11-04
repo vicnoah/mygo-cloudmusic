@@ -159,6 +159,10 @@ func (a *app) settingsView(c *ui.Context) {
 			})
 		})
 
+		a.renderHifiSettings(c, group, func(key, label, desc string, control func()) {
+			row(label, desc, control)
+		})
+
 		if a.captionsShown() {
 			group("播客", func() { a.captionSettings(row, c) })
 		}

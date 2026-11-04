@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"runtime"
 	"time"
 
@@ -146,6 +147,12 @@ type app struct {
 	wallState             wallState     // the wall of the queue's covers, as it is dragged
 	quiet                 quietState    // the quiet parts of the song playing, for its hot comments
 	captions              captionState  // the episode playing's captions, and the model that writes them
+	castOpen              bool
+	dlnaScanning          bool
+	mpvDownloading        bool
+	mpvDone               int64
+	mpvTotal              int64
+	mpvCancel             context.CancelFunc
 	sig                   playerSig
 	quitting              bool
 
@@ -202,6 +209,12 @@ func (a *app) showMain() {
 
 // Run runs the app until it quits.
 func Run() error {
+	// Starting the app again, as from its shortcut while it plays from the
+	// tray, hands the launch over to the instance already running, which
+	// opens its window again, instead of running a second app beside it.
+	if !mygo.App.RequestSingleInstanceLock() {
+		return nil
+	}
 	a := &app{
 		playlists:  map[int64]*netease.Playlist{},
 		loadingPl:  map[int64]bool{},
@@ -229,6 +242,7 @@ func Run() error {
 		a.pl.Quality = func() string { return a.settings.Quality }
 		a.pl.Normalize = func() bool { return a.settings.Normalize }
 		a.pl.Cache = newSongCache(a.settings.CacheMB)
+		a.syncMPVSettings()
 		a.pl.Changed = func() {
 			a.keepSession()
 			a.syncCaptions()
@@ -313,6 +327,9 @@ func Run() error {
 		}
 	})
 	mygo.App.OnWindowAllClosed(func() {})
+	// The Dock icon's click, and the launch another instance handed over
+	// above, as the shortcut's while the window hides in the tray.
 	mygo.App.OnActivate(func(bool) { a.showMain() })
+	mygo.App.OnSecondInstance(func([]string, string) { a.showMain() })
 	return mygo.App.Run()
 }

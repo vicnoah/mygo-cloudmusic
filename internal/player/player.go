@@ -1,9 +1,13 @@
 package player
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"math"
 	"math/rand/v2"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -11,7 +15,19 @@ import (
 
 	"netease-music-mygo/internal/lyrics"
 	"netease-music-mygo/internal/netease"
+	"netease-music-mygo/internal/player/dlna"
+	"netease-music-mygo/internal/player/mpv"
 )
+
+type mpvVolumeOutput struct {
+	e *mpv.Engine
+}
+
+func (m mpvVolumeOutput) setVolume(v float64) {
+	if m.e != nil {
+		m.e.SetVolume(v)
+	}
+}
 
 type RepeatMode int
 
@@ -66,6 +82,11 @@ type Player struct {
 	lyrics       []lyrics.Line
 	lyricsLoaded bool
 
+	useMPV   bool
+	mpvCfg   mpv.Config
+	mpvOut   *mpv.Engine
+	dlnaCtrl *dlna.Controller
+
 	// pending holds a seek asked for while the track loads.
 	pending time.Duration
 	// A seek playing fades out, then lands, then fades in: meanwhile the
@@ -77,6 +98,16 @@ type Player struct {
 
 func New(post func(func())) *Player {
 	p := &Player{post: post, at: -1, volume: 0.8, gain: 1}
+	if ctrl, err := dlna.NewController(func() { p.post(p.sync) }); err == nil {
+		p.dlnaCtrl = ctrl
+		p.dlnaCtrl.OnEnd(func() {
+			p.post(func() {
+				if p.IsCasting() {
+					p.ended()
+				}
+			})
+		})
+	}
 	// Music, mixed far enough ahead to play on while macOS keeps the app
 	// waiting, as it does while its appearance changes.
 	audio.SetLatency(audio.LatencyPlayback)
@@ -330,7 +361,9 @@ func (p *Player) Playing() bool { return p.playing }
 func (p *Player) Loading() bool { return p.loading || p.awaiting }
 
 // Ready reports whether the current track has loaded, to play.
-func (p *Player) Ready() bool { return p.out != nil }
+func (p *Player) Ready() bool {
+	return p.out != nil || p.mpvOut != nil || p.IsCasting()
+}
 
 // Err returns why the current track did not play, or "".
 func (p *Player) Err() string { return p.err }
@@ -422,8 +455,108 @@ func (p *Player) Jump(i int) {
 	}
 }
 
+// DLNA returns the DLNA casting controller, or nil if unavailable.
+func (p *Player) DLNA() *dlna.Controller {
+	return p.dlnaCtrl
+}
+
+// IsCasting reports whether audio is currently routed to a DLNA device.
+func (p *Player) IsCasting() bool {
+	return p.dlnaCtrl != nil && p.dlnaCtrl.IsCasting()
+}
+
+// SwitchOutput changes the playback output between local speaker and a DLNA device.
+// Passing "" selects the local speaker; passing a non-empty device ID selects that DLNA device.
+func (p *Player) SwitchOutput(devID string) {
+	if p.dlnaCtrl == nil {
+		return
+	}
+	wasCasting := p.IsCasting()
+	_ = p.dlnaCtrl.SelectDevice(devID)
+
+	if p.track == nil || p.at < 0 {
+		p.sync()
+		return
+	}
+
+	pos := p.Position()
+	playing := p.playing
+	at := p.at
+
+	// Stop previous output
+	if wasCasting {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = p.dlnaCtrl.Stop(ctx)
+		cancel()
+	} else {
+		p.stop()
+	}
+
+	// Reload current track on new output target starting from current position
+	p.loadSkipping(at, 0, playing, pos)
+}
+
+// SetUseMPV toggles whether to prefer the MPV high-quality audio engine.
+func (p *Player) SetUseMPV(use bool) {
+	p.useMPV = use
+}
+
+// UsingMPV reports whether the MPV high-quality audio engine is active.
+func (p *Player) UsingMPV() bool {
+	return p.useMPV && mpv.Ready()
+}
+
+// SetMPVConfig updates the configuration for MPV playback.
+func (p *Player) SetMPVConfig(cfg mpv.Config) {
+	p.mpvCfg = cfg
+}
+
+// MPVConfig returns the current MPV configuration.
+func (p *Player) MPVConfig() mpv.Config {
+	return p.mpvCfg
+}
+
+// MPVReady reports whether libmpv is ready to use on this system.
+func (p *Player) MPVReady() bool {
+	return mpv.Ready()
+}
+
 // TogglePlay pauses, fading out, or plays, fading in.
 func (p *Player) TogglePlay() {
+	if p.IsCasting() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if p.playing {
+			p.playing = false
+			_ = p.dlnaCtrl.Pause(ctx)
+		} else {
+			p.playing = true
+			_ = p.dlnaCtrl.Resume(ctx)
+		}
+		p.sync()
+		return
+	}
+	if p.mpvOut != nil {
+		if p.playing {
+			p.playing = false
+			p.fade.fade(0, fadeOut, func() {
+				p.post(func() {
+					if p.mpvOut != nil && !p.playing {
+						p.mpvOut.Pause()
+						p.sync()
+					}
+				})
+			})
+			p.sync()
+			return
+		}
+		p.playing = true
+		p.markStarted()
+		p.mpvOut.Resume()
+		p.fade.fade(1, fadeIn, nil)
+		p.sync()
+		return
+	}
 	if p.out == nil {
 		switch {
 		case p.loading:
@@ -470,6 +603,18 @@ const seekGap = 30 * time.Millisecond
 // which the audio player fades over a few milliseconds, rather than
 // cutting from one sound to the other with a click.
 func (p *Player) Seek(t time.Duration) {
+	if p.IsCasting() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = p.dlnaCtrl.Seek(ctx, t)
+		p.sync()
+		return
+	}
+	if p.mpvOut != nil {
+		p.mpvOut.Seek(t)
+		p.sync()
+		return
+	}
 	if p.out == nil {
 		p.pending = t
 		return
@@ -504,6 +649,11 @@ func (p *Player) Seek(t time.Duration) {
 
 func (p *Player) SetVolume(v float64) {
 	p.volume = v
+	if p.IsCasting() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = p.dlnaCtrl.SetVolume(ctx, v)
+	}
 	p.applyGain()
 }
 
@@ -536,19 +686,35 @@ func normGain(st *netease.Stream) float64 {
 
 func (p *Player) Position() time.Duration {
 	switch {
-	case p.out == nil:
-		return p.pending
 	case p.seeking:
 		return p.seekTo
+	case p.IsCasting():
+		_, pos, _ := p.dlnaCtrl.Status()
+		return pos
+	case p.mpvOut != nil:
+		return p.mpvOut.Position()
+	case p.out == nil:
+		return p.pending
 	}
 	return p.out.Position()
 }
 
 func (p *Player) Duration() time.Duration {
-	if p.track == nil {
-		return 0
+	if p.track != nil && p.track.Length() > 0 {
+		return p.track.Length()
 	}
-	return p.track.Length()
+	if p.IsCasting() {
+		_, _, dur := p.dlnaCtrl.Status()
+		if dur > 0 {
+			return dur
+		}
+	}
+	if p.mpvOut != nil {
+		if d := p.mpvOut.Duration(); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 // Levels returns the spectrum of what plays now.
@@ -568,7 +734,11 @@ func (p *Player) stop() {
 		out.Pause()
 		time.AfterFunc(100*time.Millisecond, out.Close)
 	}
-	p.out, p.stream, p.info = nil, nil, nil
+	if mpvOut := p.mpvOut; mpvOut != nil {
+		mpvOut.Pause()
+		time.AfterFunc(100*time.Millisecond, mpvOut.Close)
+	}
+	p.out, p.mpvOut, p.stream, p.info = nil, nil, nil, nil
 	p.seeking = false
 	p.fade.attach(nil, 1)
 }
@@ -656,15 +826,112 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 				}
 				return
 			}
-			p.stream, p.info = s, info
+			p.info = info
 			p.gain = normGain(info)
-			p.out = audio.NewPlayer(s)
-			// From its middle, as a session picked up again, it fades in.
-			level := 1.0
+
+			fadeLevel := 1.0
 			if p.pending > 0 {
-				level = 0
+				fadeLevel = 0
 			}
-			p.fade.attach(p.out, level)
+
+			// 1. DLNA target active: stream via local proxy to remote device.
+			if p.IsCasting() {
+				if s != nil {
+					s.Close()
+				}
+				headers := http.Header{}
+				if info.Header != nil {
+					headers = info.Header()
+				}
+				localFile := ""
+				if p.Cache != nil {
+					localFile = p.Cache.FilePath(t.ID, level)
+				}
+				trackID := fmt.Sprintf("%d", t.ID)
+				_ = p.dlnaCtrl.PlayTrack(context.Background(), trackID, t.Name, info.URL, localFile, info.Type, headers, t.Length(), p.pending)
+				p.pending = 0
+				p.markStarted()
+				p.sync()
+				return
+			}
+
+			// 2. High-quality MPV engine active.
+			if p.UsingMPV() {
+				engine, err := mpv.NewEngine(p.mpvCfg)
+				if err == nil {
+					playURL := info.URL
+					if p.Cache != nil {
+						if f := p.Cache.FilePath(t.ID, level); f != "" {
+							playURL = f
+						}
+					}
+					// If streaming over network and we have a proxy, route via local proxy
+					// to solve auth headers, cookies, range requests and MIME types cleanly.
+					if (strings.HasPrefix(playURL, "http://") || strings.HasPrefix(playURL, "https://")) && p.dlnaCtrl != nil && p.dlnaCtrl.Proxy() != nil {
+						headers := http.Header{}
+						if info.Header != nil {
+							headers = info.Header()
+						}
+						ext := info.Type
+						if ext == "" {
+							ext = t.Format
+						}
+						ext = strings.TrimPrefix(ext, ".")
+						var trackID string
+						if ext != "" {
+							trackID = fmt.Sprintf("mpv-%d-%d.%s", t.ID, time.Now().UnixNano(), ext)
+						} else {
+							trackID = fmt.Sprintf("mpv-%d-%d", t.ID, time.Now().UnixNano())
+						}
+						p.dlnaCtrl.Proxy().Register(trackID, dlna.StreamSource{
+							RemoteURL:   playURL,
+							Headers:     headers,
+							ContentType: dlna.FormatToMIME(info.Type),
+						})
+						playURL = p.dlnaCtrl.Proxy().LocalURL(trackID)
+					}
+
+					if playURL != "" {
+						if err := engine.Play(playURL, nil, p.pending); err == nil {
+							p.mpvOut = engine
+							p.fade.attach(mpvVolumeOutput{p.mpvOut}, fadeLevel)
+							p.applyGain()
+							p.mpvOut.OnEnd(func() {
+								p.post(func() {
+									if gen == p.gen {
+										p.ended()
+									}
+								})
+							})
+							p.pending = 0
+							if p.playing {
+								p.mpvOut.Resume()
+								p.fade.fade(1, fadeIn, nil)
+								p.markStarted()
+							} else {
+								p.mpvOut.Pause()
+							}
+							if s != nil {
+								s.Close()
+							}
+							p.sync()
+							return
+						}
+					}
+					engine.Close()
+				}
+			}
+
+			// 3. Built-in pure Go player.
+			if s == nil {
+				p.err = "无法解码当前音频格式"
+				p.playing = false
+				p.sync()
+				return
+			}
+			p.stream = s
+			p.out = audio.NewPlayer(s)
+			p.fade.attach(audioPlayerOutput{p.out}, fadeLevel)
 			p.applyGain()
 			p.out.OnEnd(func() {
 				p.post(func() {
@@ -700,7 +967,13 @@ func (p *Player) open(t netease.Track, level string) (*netease.Stream, stream, e
 		if err != nil {
 			return nil, nil, err
 		}
+		if p.UsingMPV() || p.IsCasting() {
+			return info, nil, nil
+		}
 		dl = p.Cache.download(t.ID, info)
+	}
+	if p.UsingMPV() || p.IsCasting() {
+		return info, nil, nil
 	}
 	s, err := openStream(dl, t.Duration)
 	if err != nil {

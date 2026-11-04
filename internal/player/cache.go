@@ -45,6 +45,30 @@ func keepable(level, ext string) bool {
 	return slices.Contains(netease.Levels, level) && (ext == "mp3" || ext == "flac")
 }
 
+// FilePath returns the path to the cached song file if completely downloaded, or "".
+func (c *Cache) FilePath(id int64, level string) string {
+	if c == nil {
+		return ""
+	}
+	at := max(slices.Index(netease.Levels, level), 0)
+	for _, lv := range netease.Levels[at:] {
+		key := cacheKey(id, lv)
+		meta, err := os.ReadFile(filepath.Join(c.dir, key+".json"))
+		if err != nil {
+			continue
+		}
+		var st netease.Stream
+		if json.Unmarshal(meta, &st) != nil {
+			continue
+		}
+		p := filepath.Join(c.dir, key+"."+st.Type)
+		if fi, err := os.Stat(p); err == nil && fi.Size() > 0 {
+			return p
+		}
+	}
+	return ""
+}
+
 // lookup returns a song kept at level or a better one, open to read, with
 // its stream.
 func (c *Cache) lookup(id int64, level string) (*download, *netease.Stream, bool) {

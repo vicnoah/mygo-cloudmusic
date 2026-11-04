@@ -445,6 +445,7 @@ func (a *app) playerBar(c *ui.Context) {
 			if iconButton(c.Key("queue"), iconQueue, 16, p.muted, "播放队列").Clicked() && tr != nil {
 				a.nowPlaying, a.npPane = true, paneQueue
 			}
+			a.castButton(c, p)
 			a.volumeButton(c, p.text.Alpha(0.75))
 		})
 	})

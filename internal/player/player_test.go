@@ -39,7 +39,7 @@ func posted() (chan func(), *Player) {
 	out.SetVolume(0)
 	out.Play()
 	p.Attach(out)
-	p.fade.attach(out, 1)
+	p.fade.attach(audioPlayerOutput{out}, 1)
 	return ch, p
 }
 

@@ -103,7 +103,7 @@ func ConfigurePlayer(p *player.Player, s *State, mode func() backend.TranscodeMo
 		if bitrate != nil {
 			b = bitrate()
 		}
-		return openFeiniuAudio(client, tr, m, b)
+		return openFeiniuAudio(client, tr, m, b, p.UsingMPV() || p.IsCasting())
 	}
 	p.ResolveStream = func(tr *netease.Track, level string) (*netease.Stream, error) {
 		if tr == nil {
@@ -150,8 +150,8 @@ func ConfigurePlayer(p *player.Player, s *State, mode func() backend.TranscodeMo
 // openFeiniuAudio keeps the provider's transcode policy beside its client.
 // The shared player receives only the segmented source interface and owns all
 // decoding and seeking behavior.
-func openFeiniuAudio(client *backend.Client, tr *netease.Track, mode backend.TranscodeMode, bitrate int) (*netease.Stream, player.AudioStream, error) {
-	if backend.ShouldTranscode(tr, mode) {
+func openFeiniuAudio(client *backend.Client, tr *netease.Track, mode backend.TranscodeMode, bitrate int, advancedAudio bool) (*netease.Stream, player.AudioStream, error) {
+	if mode == backend.TranscodeAlways || (!advancedAudio && backend.ShouldTranscode(tr, mode)) {
 		h, err := client.TranscodeHLSWithBitrate(context.Background(), tr, bitrate)
 		if err != nil {
 			return nil, nil, err
@@ -162,7 +162,7 @@ func openFeiniuAudio(client *backend.Client, tr *netease.Track, mode backend.Tra
 		}
 		return &netease.Stream{Type: "mp3", Level: "exhigh"}, s, nil
 	}
-	if !backend.Native(tr.Format) || tr.Cue {
+	if !advancedAudio && (!backend.Native(tr.Format) || tr.Cue) {
 		return nil, nil, backend.NativePlaybackError(tr)
 	}
 	return nil, nil, nil

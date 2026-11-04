@@ -87,6 +87,15 @@ type settings struct {
 	// SearchHistory keeps submitted keywords, most recent first.
 	SearchHistory []string `json:"searchHistory,omitempty"`
 
+	// UseMPV enables high-quality playback via libmpv when available.
+	UseMPV bool `json:"useMPV,omitempty"`
+	// MPVExclusive enables audio device exclusive mode in libmpv.
+	MPVExclusive bool `json:"mpvExclusive,omitempty"`
+	// MPVReplayGain configures replaygain normalization mode ("no", "album", "track").
+	MPVReplayGain string `json:"mpvReplayGain,omitempty"`
+	// MPVGapless enables gapless audio playback in libmpv.
+	MPVGapless bool `json:"mpvGapless,omitempty"`
+
 	path string // where they were loaded from, and are saved to
 }
 

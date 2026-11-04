@@ -295,6 +295,7 @@ func (h platformHost) SharedSettings(c *ui.Context) {
 			}
 		})
 	}
+	a.renderHifiSettings(c, group, row)
 	group("缓存", func() {
 		row("shared-cache", "歌曲缓存", a.cacheUsage(), func() {
 			labels := make([]string, len(cacheLimits))
