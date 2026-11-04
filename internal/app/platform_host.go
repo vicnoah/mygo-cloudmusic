@@ -722,25 +722,66 @@ func (h platformHost) RenderCards(c *ui.Context, p *paging.Pager[netease.Playlis
 			}
 		})
 	}
-	if p.Total() < 0 {
-		if p.FailedAt(0) {
-			h.a.centered(c, "加载失败，请稍后重试", p.Retry)
-			return
-		}
-		h.a.platformCardsSkeleton(c, view)
+	top, bottom := h.a.insets(c)
+	if p.FailedAt(0) {
+		ui.Column(c).Grow(1).Padding(top+pageGap, pagePad, bottom+48, pagePad).Children(func() {
+			header(c)
+			if len(view.Sort) > 0 {
+				ui.Row(c).Margin(-6, 0, 18, 0).AlignItems(ui.Center).Gap(10).Children(func() {
+					ui.Text(c, "排序").FontSize(12).TextColor(h.a.pal.muted)
+					labels := make([]string, len(view.Sort))
+					at := 0
+					for i, ch := range view.Sort {
+						labels[i] = ch.Label
+						if ch.Value == view.Current {
+							at = i
+						}
+					}
+					if segmented(c.Key("platform-sort"), &at, labels...) && view.OnSort != nil {
+						view.OnSort(view.Sort[at].Value)
+					}
+				})
+			}
+			ui.Column(c).Grow(1).Center().Gap(12).Children(func() {
+				ui.Text(c, "加载失败，请稍后重试").TextColor(h.a.pal.muted).FontSize(13)
+				if ui.Button(c, "重试").Clicked() {
+					p.Retry()
+				}
+			})
+		})
 		return
 	}
-	if p.FailedAt(0) {
-		h.a.centered(c, "加载失败，请稍后重试", p.Retry)
+	if p.Total() < 0 {
+		h.a.platformCardsSkeleton(c, view)
 		return
 	}
 	h.prefetchCardArtwork(p, c)
 	pages, size := p.PageCount(), p.PageSize()
 	if pages == 0 {
-		h.a.centered(c, "没有找到相关内容", nil)
+		ui.Column(c).Grow(1).Padding(top+pageGap, pagePad, bottom+48, pagePad).Children(func() {
+			header(c)
+			if len(view.Sort) > 0 {
+				ui.Row(c).Margin(-6, 0, 18, 0).AlignItems(ui.Center).Gap(10).Children(func() {
+					ui.Text(c, "排序").FontSize(12).TextColor(h.a.pal.muted)
+					labels := make([]string, len(view.Sort))
+					at := 0
+					for i, ch := range view.Sort {
+						labels[i] = ch.Label
+						if ch.Value == view.Current {
+							at = i
+						}
+					}
+					if segmented(c.Key("platform-sort"), &at, labels...) && view.OnSort != nil {
+						view.OnSort(view.Sort[at].Value)
+					}
+				})
+			}
+			ui.Column(c).Grow(1).Center().Children(func() {
+				ui.Text(c, "没有找到相关内容").TextColor(h.a.pal.muted).FontSize(13)
+			})
+		})
 		return
 	}
-	top, bottom := h.a.insets(c)
 	h.a.underTop, h.a.underBottom = true, true
 	renderArt := view.Art
 	if renderArt == nil && view.Placeholder != nil {
@@ -845,7 +886,7 @@ func (h platformHost) roundCard(c *ui.Context, pl *netease.Playlist, size float3
 			art.Shadow(0, 2, 8, -2, p.cardShade)
 		}
 		art.Children(func() { h.Cover(c, pl.Cover(), size, size/2) })
-		ui.Text(c, pl.Name).FontSize(13).FontWeight(500).SingleLine()
+		ui.Text(c, pl.Name).FontSize(13).FontWeight(500).SingleLine().AlignSelf(ui.Center).TextAlign(ui.Center)
 	})
 	return b.Clicked()
 }

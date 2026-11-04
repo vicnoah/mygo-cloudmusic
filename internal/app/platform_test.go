@@ -70,14 +70,50 @@ func TestQQMusicPlatformContextSwitch(t *testing.T) {
 	}
 }
 
+// Selecting Subsonic family platforms installs player hooks and switches home route.
+func TestSubsonicPlatformsContextSwitch(t *testing.T) {
+	for _, id := range []platform.ID{platform.NavidromeID, platform.JellyfinID, platform.GonicID, platform.SubsonicID} {
+		a := newPlatformTestApp()
+		a.setPlatform(id)
+		if a.platformID != id || a.settings.Platform != string(id) {
+			t.Fatalf("%s was not selected: id=%q setting=%q", id, a.platformID, a.settings.Platform)
+		}
+		if got := a.activeHome().Route().Page; got != "library" {
+			t.Fatalf("%s home route = %q", id, got)
+		}
+		if a.pl.ResolveStream == nil || a.pl.Artwork == nil || a.pl.ResolveLyrics == nil {
+			t.Fatalf("%s player hooks were not installed", id)
+		}
+		a.setPlatform(platform.NeteaseID)
+		if a.pl.ResolveStream != nil {
+			t.Fatalf("%s player hooks survived switching back to NetEase", id)
+		}
+	}
+}
+
 // Shared platform settings enumerate adapter identities instead of hardcoding provider names.
 func TestPlatformInfosComeFromAdapters(t *testing.T) {
 	a := newPlatformTestApp()
 	infos := a.platformInfos()
-	if len(infos) != 3 {
-		t.Fatalf("platform count = %d, want 3", len(infos))
+	if len(infos) != 8 {
+		t.Fatalf("platform count = %d, want 8", len(infos))
 	}
-	if infos[0].ID != platform.NeteaseID || infos[0].Name != "网易云音乐" {
+	expectedOrder := []platform.ID{
+		platform.NeteaseID,
+		platform.QQMusicID,
+		platform.FnmusicID,
+		platform.NavidromeID,
+		platform.JellyfinID,
+		platform.GonicID,
+		platform.SubsonicID,
+		platform.SongloftID,
+	}
+	for i, wantID := range expectedOrder {
+		if infos[i].ID != wantID {
+			t.Fatalf("infos[%d].ID = %q, want %q", i, infos[i].ID, wantID)
+		}
+	}
+	if infos[0].Name != "网易云音乐" {
 		t.Fatalf("default platform = %#v", infos[0])
 	}
 	for _, info := range infos[1:] {
