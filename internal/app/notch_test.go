@@ -5,6 +5,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -18,6 +19,9 @@ import (
 // The notch, turned off, shows itself as the first song plays, and only
 // then; its button keeps it on.
 func TestNotchGreetsOnce(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("notch greeting is darwin only")
+	}
 	a := newTestApp()
 	a.settings = defaultSettings()
 	n := &notch{a: a, w0: 200, h0: 32, winW: notchOpenW + 60, winH: 240}
@@ -60,6 +64,9 @@ func TestNotchGreetsOnce(t *testing.T) {
 // be clicked. It used to open the player, which hid the button, and leaving
 // brought it back only to open again as the pointer came back to it.
 func TestNotchGreetingKeptUnderPointer(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("notch greeting is darwin only")
+	}
 	a := newTestApp()
 	a.settings = defaultSettings()
 	n := &notch{a: a, real: true, w0: 185, h0: 32, winW: notchOpenW + 60, winH: 240}

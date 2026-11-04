@@ -20,4 +20,5 @@ require (
 	github.com/icza/bitio v1.1.0 // indirect
 	github.com/mewkiz/pkg v0.0.0-20250417130911-3f050ff8c56d // indirect
 	github.com/mewpkg/term v0.0.0-20241026122259-37a80af23985 // indirect
+	github.com/supersonic-app/go-subsonic v0.0.0-20260807144657-acbe3dde04b7 // indirect
 )
