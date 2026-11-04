@@ -39,17 +39,23 @@ func TestDefaultThumbnailGeneration(t *testing.T) {
 
 // Tests connection, ping, album paging, song streaming, lyrics and search against a real Subsonic server.
 func TestLiveSubsonic(t *testing.T) {
-	addr := os.Getenv("SUBSONIC_TEST_URL")
+	if os.Getenv("LIVE") == "" {
+		t.Skip("skipping live test without LIVE=1")
+	}
+	addr := os.Getenv("SUBSONIC_ADDR")
 	if addr == "" {
-		addr = "http://172.16.1.10:4533"
+		addr = os.Getenv("SUBSONIC_TEST_URL")
 	}
-	user := os.Getenv("SUBSONIC_TEST_USER")
+	user := os.Getenv("SUBSONIC_USER")
 	if user == "" {
-		user = "wwg"
+		user = os.Getenv("SUBSONIC_TEST_USER")
 	}
-	pass := os.Getenv("SUBSONIC_TEST_PASS")
+	pass := os.Getenv("SUBSONIC_PASS")
 	if pass == "" {
-		pass = "786b6C0PlKdRNB"
+		pass = os.Getenv("SUBSONIC_TEST_PASS")
+	}
+	if addr == "" || user == "" {
+		t.Skip("LIVE is set, but SUBSONIC_ADDR and SUBSONIC_USER do not name a service to try")
 	}
 
 	// Quick reachability check

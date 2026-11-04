@@ -3,11 +3,32 @@ package subsonic
 import (
 	"context"
 	"fmt"
+	"html"
 	"strings"
 
+	gosubsonic "github.com/supersonic-app/go-subsonic/subsonic"
 	"netease-music-mygo/internal/netease"
 	"netease-music-mygo/internal/platform"
 )
+
+func formatStructuredLyrics(sl *gosubsonic.StructuredLyrics) string {
+	if sl == nil || len(sl.Lines) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, line := range sl.Lines {
+		text := strings.TrimSpace(line.Text)
+		if text == "" {
+			text = strings.TrimSpace(line.Value)
+		}
+		ms := line.Start
+		m := ms / 60000
+		s := (ms % 60000) / 1000
+		cs := (ms % 1000) / 10
+		sb.WriteString(fmt.Sprintf("[%02d:%02d.%02d]%s\n", m, s, cs, text))
+	}
+	return html.UnescapeString(sb.String())
+}
 
 // Lyrics fetches synchronized or plain lyrics for a track.
 // It prioritizes OpenSubsonic's GetLyricsBySongId and falls back to standard GetLyrics.
@@ -25,23 +46,8 @@ func (p *Provider) Lyrics(ctx context.Context, tr *netease.Track) (platform.Lyri
 		lyricsList, err := sc.GetLyricsBySongId(tr.Ref)
 		if err == nil && lyricsList != nil && len(lyricsList.StructuredLyrics) > 0 {
 			for _, sl := range lyricsList.StructuredLyrics {
-				if sl != nil && len(sl.Lines) > 0 {
-					var sb strings.Builder
-					for _, line := range sl.Lines {
-						text := strings.TrimSpace(line.Text)
-						if text == "" {
-							text = strings.TrimSpace(line.Value)
-						}
-						ms := line.Start
-						m := ms / 60000
-						s := (ms % 60000) / 1000
-						cs := (ms % 1000) / 10
-						sb.WriteString(fmt.Sprintf("[%02d:%02d.%02d]%s\n", m, s, cs, text))
-					}
-					lrc := sb.String()
-					if strings.TrimSpace(lrc) != "" {
-						return platform.Lyrics{LRC: lrc}, nil
-					}
+				if lrc := formatStructuredLyrics(sl); lrc != "" {
+					return platform.Lyrics{LRC: lrc}, nil
 				}
 			}
 		}
@@ -54,7 +60,7 @@ func (p *Provider) Lyrics(ctx context.Context, tr *netease.Track) (platform.Lyri
 	}
 	lyrics, err := sc.GetLyrics(tr.Name, artist)
 	if err == nil && lyrics != nil && strings.TrimSpace(lyrics.Text) != "" {
-		return platform.Lyrics{LRC: lyrics.Text}, nil
+		return platform.Lyrics{LRC: html.UnescapeString(lyrics.Text)}, nil
 	}
 
 	return platform.Lyrics{}, nil

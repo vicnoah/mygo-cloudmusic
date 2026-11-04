@@ -3,6 +3,7 @@ package subsonic
 import (
 	"github.com/egoist/mygo/ui"
 	"netease-music-mygo/internal/netease"
+	backend "netease-music-mygo/internal/platform/subsonic"
 )
 
 func (h *Home) playlistMenu(m *ui.Menu, pl netease.Playlist) {
@@ -39,6 +40,14 @@ func (h *Home) trackMenu(m *ui.Menu, tr *netease.Track, pid int64) {
 			}
 		}
 	})
+	if pid == 0 && h.route.Page == PagePlaylist {
+		pid = h.route.ID
+	}
+	if pid == backend.RecentID && h.route.Page == PagePlaylist {
+		if m.Item("从最近播放中移除").Chosen() {
+			h.RemoveRecent(tr.ID)
+		}
+	}
 	if pid != 0 && h.route.Page == PagePlaylist && h.route.ID == pid {
 		var currentPl *netease.Playlist
 		for _, pl := range h.state.Playlists() {

@@ -107,6 +107,7 @@ var platformOrder = map[platform.ID]int{
 	platform.JellyfinID:  4,
 	platform.GonicID:     5,
 	platform.SubsonicID:  6,
+	platform.SongloftID:  7,
 }
 
 // platformInfos returns the identities available to the shared platform

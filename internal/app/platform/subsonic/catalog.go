@@ -22,6 +22,7 @@ type ListKind string
 const (
 	ListLibrary   ListKind = "library"
 	ListFavorites ListKind = "favorites"
+	ListRecent    ListKind = "recent"
 	ListPlaylist  ListKind = "playlist"
 	ListAlbum     ListKind = "album"
 	ListArtist    ListKind = "artist"
@@ -88,6 +89,7 @@ type Catalog struct {
 
 	Lists         map[int64]*List
 	Meta          map[int64]netease.Playlist
+	Recent        *RecentStore
 	SearchList    *List
 	SearchAlbums  *paging.Pager[netease.Playlist]
 	SearchArtists *paging.Pager[netease.Playlist]
@@ -101,12 +103,17 @@ func NewCatalog(session *State, post func(func())) *Catalog {
 	if post == nil {
 		post = func(fn func()) { fn() }
 	}
+	var profID string
+	if session != nil {
+		profID = string(session.Profile().ID)
+	}
 	cat := &Catalog{
 		Session:   session,
 		Post:      post,
 		Lists:     map[int64]*List{},
 		Meta:      map[int64]netease.Playlist{},
 		AlbumSort: "newest",
+		Recent:    NewRecentStore(profID),
 	}
 	cat.OnTracks = func(items []netease.Track) {
 		if cat.Session != nil {
@@ -198,6 +205,10 @@ func (c *Catalog) ListForRoute(id int64, kind, ref string) *List {
 	case id == backend.FavoritesID:
 		lk = ListFavorites
 		name = "我喜欢"
+	case id == backend.RecentID || kind == "recent":
+		id = backend.RecentID
+		lk = ListRecent
+		name = "最近播放"
 	case kind == "album":
 		lk = ListAlbum
 		if name == "歌单" {
@@ -255,6 +266,34 @@ func (c *Catalog) ListFor(id int64, kind ListKind, ref, name string) *List {
 		}
 		return l
 	}
+
+	if kind == ListRecent || id == backend.RecentID {
+		id = backend.RecentID
+		kind = ListRecent
+		if name == "" || name == "歌单" {
+			name = "最近播放"
+		}
+		spec := Spec{Kind: kind, Ref: ref}
+		list := &List{
+			ID:   id,
+			Spec: spec,
+			Kind: string(kind),
+			Name: name,
+			Sub:  "本地播放记录",
+		}
+		fetch := func(page int) ([]netease.Track, int, error) {
+			if c.Recent == nil {
+				return nil, 0, nil
+			}
+			offset := (page - 1) * PageSize
+			tracks, total := c.Recent.Slice(offset, PageSize)
+			return tracks, total, nil
+		}
+		list.Pages = c.trackPager(fetch)
+		c.Lists[id] = list
+		return list
+	}
+
 	spec := Spec{Kind: kind, Ref: ref}
 	list := &List{
 		ID:   id,
@@ -417,4 +456,24 @@ func (c *Catalog) Reset() {
 	c.SearchArtists = nil
 	c.Albums = nil
 	c.Artists = nil
+}
+
+func (c *Catalog) RemoveRecent(id int64) {
+	if c == nil || c.Recent == nil {
+		return
+	}
+	c.Recent.Remove(id)
+	if l := c.Lists[backend.RecentID]; l != nil {
+		l.Refresh()
+	}
+}
+
+func (c *Catalog) ClearRecent() {
+	if c == nil || c.Recent == nil {
+		return
+	}
+	c.Recent.Clear()
+	if l := c.Lists[backend.RecentID]; l != nil {
+		l.Refresh()
+	}
 }

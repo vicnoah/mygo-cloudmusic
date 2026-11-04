@@ -169,6 +169,9 @@ func (a *Adapter) ConfigurePlayer(p *player.Player) {
 		if tr == nil || !a.ownsSource(tr.Source) || s == nil {
 			return
 		}
+		if a.home != nil {
+			a.home.RecordStarted(*tr)
+		}
 		provider := s.Provider()
 		if provider == nil {
 			return

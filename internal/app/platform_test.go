@@ -95,8 +95,8 @@ func TestSubsonicPlatformsContextSwitch(t *testing.T) {
 func TestPlatformInfosComeFromAdapters(t *testing.T) {
 	a := newPlatformTestApp()
 	infos := a.platformInfos()
-	if len(infos) != 7 {
-		t.Fatalf("platform count = %d, want 7", len(infos))
+	if len(infos) != 8 {
+		t.Fatalf("platform count = %d, want 8", len(infos))
 	}
 	expectedOrder := []platform.ID{
 		platform.NeteaseID,
@@ -106,6 +106,7 @@ func TestPlatformInfosComeFromAdapters(t *testing.T) {
 		platform.JellyfinID,
 		platform.GonicID,
 		platform.SubsonicID,
+		platform.SongloftID,
 	}
 	for i, wantID := range expectedOrder {
 		if infos[i].ID != wantID {

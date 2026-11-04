@@ -24,6 +24,7 @@ type platformSettings struct {
 	Jellyfin  appplatform.PlatformSettings `json:"jellyfin,omitempty"`
 	Gonic     appplatform.PlatformSettings `json:"gonic,omitempty"`
 	Subsonic  appplatform.PlatformSettings `json:"subsonic,omitempty"`
+	Songloft  appplatform.PlatformSettings `json:"songloft,omitempty"`
 }
 
 // qqQuality keeps only the levels QQ can actually stream.
