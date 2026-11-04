@@ -2,7 +2,7 @@
 
 用 Go 和 [MyGo](https://github.com/egoist/mygo) 写的第三方网易云音乐桌面客户端，原生界面，无 WebView。
 
-在网易云音乐之外，还适配了 **飞牛音乐（FN Music）** 与 **QQ 音乐** 两个平台：设置里可随时切换，各平台的账号、歌单、收藏与播放设置互相独立，底部播放器、正在播放页、歌词、缓存等共用同一套体验。
+在网易云音乐之外，还适配了 **飞牛音乐（FN Music）**、**QQ 音乐** 以及 **Navidrome / Jellyfin / Gonic 等 Subsonic 兼容服务**：设置里可随时切换，各平台的账号、歌单、收藏与播放设置互相独立，底部播放器、正在播放页、歌词、缓存等共用同一套体验。
 
 ## 功能
 
@@ -52,6 +52,17 @@
 - 逐字歌词与翻译，封面取色的大卡片与播放器界面
 - 绿色品牌强调色，与网易云、飞牛各自独立
 
+### Subsonic 兼容平台（Navidrome / Jellyfin / Gonic 等）
+
+- 实验性支持连接自建 Subsonic / OpenSubsonic 兼容服务（当前已在 Navidrome 上完成完整测试）
+- 填写服务器地址、用户名与密码/API Token 即可连接登录，登录凭据保存在平台独立命名空间与系统安全存储中
+- 音乐库支持全量歌曲浏览与按目录树层级深入浏览播放
+- 专辑与歌手详情，支持按最新、最常播放、最近播放、年份、字母、收藏等维度排序
+- 支持单曲红心与专辑收藏/取消收藏，实时同步服务端 Star 标记与即时刷新
+- 歌单的创建、重命名、删除与曲目管理（添加/移出歌单）
+- 多维度检索（单曲、专辑、歌手），搜索结果直达详情与连续播放
+- 支持服务端转码输出与最大码率调节（可在设置中配置自动 / 总是 / 从不转码与码率上限）
+
 ## 构建
 
 需要 Go 1.27+。
@@ -69,6 +80,7 @@ go test ./...        # 运行测试
 - [folia-major](https://github.com/chthollyphile/folia-major)：歌词动画效果的参考
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)、[Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) 与 [Silero VAD](https://github.com/snakers4/silero-vad)：本机语音识别
 - [mygo-qyin](https://github.com/Amamiya23/mygo-qyin)：QQ 音乐平台适配的参考实现
+- [go-subsonic](https://github.com/supersonic-app/go-subsonic)：Subsonic API Go 客户端实现参考
 - 飞牛音乐适配基于 [mygo-cloudmusic](https://github.com/egoist/mygo-cloudmusic) 的平台接缝开发，感谢项目原作者 [egoist](https://github.com/egoist)
 
 本项目与网易云音乐、QQ 音乐官方无关，音乐版权归各权利人所有。
