@@ -78,6 +78,9 @@ func NewProxy() (*Proxy, error) {
 	mux.HandleFunc("/stream/", p.handleStream)
 	mux.HandleFunc("/cover/", p.handleCover)
 
+	// Ensure Windows Defender Firewall allows incoming connections to the proxy
+	go ensureFirewallRule()
+
 	p.server = &http.Server{
 		Handler:      mux,
 		ReadTimeout:  30 * time.Second,

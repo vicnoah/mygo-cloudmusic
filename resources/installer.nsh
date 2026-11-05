@@ -13,7 +13,14 @@
   not_running:
 !macroend
 
+!macro customInstall
+  ; Configure Windows Defender Firewall rule to allow inbound DLNA audio streaming
+  nsExec::Exec 'netsh advfirewall firewall delete rule name="MyGo 云音乐"'
+  nsExec::Exec 'netsh advfirewall firewall add rule name="MyGo 云音乐" dir=in action=allow program="$INSTDIR\MyGo 云音乐.exe" enable=yes profile=private,public'
+!macroend
+
 !macro customUnInstall
+  nsExec::Exec 'netsh advfirewall firewall delete rule name="MyGo 云音乐"'
   nsExec::Exec 'taskkill /F /T /IM "MyGo 云音乐.exe"'
   Sleep 500
 !macroend
