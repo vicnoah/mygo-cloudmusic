@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"sort"
+	"time"
 
 	appplatform "netease-music-mygo/internal/app/platform"
 	"netease-music-mygo/internal/netease"
@@ -75,10 +76,28 @@ func (a *app) startPlatform() {
 	if rt == nil || !rt.Configured() {
 		return
 	}
+	currentPlatform := a.platformID
 	go func() {
-		err := rt.Connect(context.Background(), rt.Config())
+		var err error
+		// Try up to 3 times on cold start with exponential backoff for network wake-up
+		delays := []time.Duration{0, 1500 * time.Millisecond, 3000 * time.Millisecond}
+		for i, delay := range delays {
+			if delay > 0 {
+				time.Sleep(delay)
+			}
+			if a.platformID != currentPlatform {
+				return
+			}
+			err = rt.Connect(context.Background(), rt.Config())
+			if err == nil || err == context.Canceled {
+				return
+			}
+			if i < len(delays)-1 {
+				continue
+			}
+		}
 		a.post(func() {
-			if err != nil && err != context.Canceled {
+			if a.platformID == currentPlatform && err != nil && err != context.Canceled {
 				a.toast = err.Error()
 			}
 		})

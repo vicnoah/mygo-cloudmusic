@@ -47,7 +47,7 @@ var (
 	lookupURL         = "https://5ddd.com/api/v1/fn/con"
 	lookupPath        = "/api/v1/fn/con"
 	lookupKey         = "zIGtkc3dqZnJpd29qZXJqa2w7c"
-	probeTimeout      = 2 * time.Second
+	probeTimeout      = 5 * time.Second
 	relayProbeTimeout = 10 * time.Second
 	lookupTimeout     = 10 * time.Second
 	relayDomains      = []string{"5ddd.com", "fnos.net"}

@@ -71,7 +71,8 @@ type Engine struct {
 	cfg    Config
 	closed bool
 
-	onEnd func()
+	onEnd   func()
+	onError func(string)
 
 	playing   bool
 	position  time.Duration
@@ -87,7 +88,7 @@ type Engine struct {
 // NewEngine creates and configures a high-quality audio playback engine.
 func NewEngine(cfg Config) (*Engine, error) {
 	opts := map[string]string{
-		"stream-lavf-o":  "seekable=1",
+		"stream-lavf-o":  "seekable=1,reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
 		"force-seekable": "yes",
 	}
 	if cfg.NullAO {
@@ -321,11 +322,18 @@ func (e *Engine) applyAudioFiltersLocked() {
 	e.inst.SetProperty("af", strings.Join(filters, ","))
 }
 
-// OnEnd sets the callback to invoke when a track reaches its end.
+// OnEnd sets the callback to invoke when a track reaches its natural end.
 func (e *Engine) OnEnd(fn func()) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.onEnd = fn
+}
+
+// OnError sets the callback to invoke when an audio loading or decoding failure occurs.
+func (e *Engine) OnError(fn func(string)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onError = fn
 }
 
 func (e *Engine) runEvents() {
@@ -339,19 +347,31 @@ func (e *Engine) runEvents() {
 			return
 		}
 
-		evID, _ := inst.WaitEvent(0.2)
+		evID, _, endReason := inst.WaitEvent(0.2)
 		if evID != EventNone {
-			fmt.Printf("[mpv-event] id=%d\n", evID)
+			fmt.Printf("[mpv-event] id=%d reason=%d\n", evID, endReason)
 		}
 		switch evID {
 		case EventShutdown:
 			return
 		case EventEndFile:
-			e.mu.RLock()
-			onEnd := e.onEnd
-			e.mu.RUnlock()
-			if onEnd != nil {
-				onEnd()
+			if endReason == EndFileReasonError {
+				e.mu.Lock()
+				e.playing = false
+				onError := e.onError
+				e.mu.Unlock()
+				if onError != nil {
+					onError("音频加载或解码失败")
+				}
+				continue
+			}
+			if endReason == EndFileReasonEOF {
+				e.mu.RLock()
+				onEnd := e.onEnd
+				e.mu.RUnlock()
+				if onEnd != nil {
+					onEnd()
+				}
 			}
 		case EventFileLoaded, EventPlaybackRestart:
 			e.mu.Lock()
@@ -359,6 +379,37 @@ func (e *Engine) runEvents() {
 			e.mu.Unlock()
 		}
 	}
+}
+
+// Append adds a track to the end of MPV's internal playlist for gapless prefetching.
+func (e *Engine) Append(sourceURL string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed || e.inst == nil {
+		return fmt.Errorf("mpv: engine closed")
+	}
+	code := e.inst.Command([]string{"loadfile", sourceURL, "append"})
+	if code < 0 {
+		return fmt.Errorf("mpv: loadfile append failed with code %d", code)
+	}
+	return nil
+}
+
+// Stop stops playback and clears playlist without destroying the engine.
+func (e *Engine) Stop() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.inst != nil && !e.closed {
+		e.playing = false
+		e.inst.Command([]string{"stop"})
+	}
+}
+
+// Closed reports whether the engine has been shut down.
+func (e *Engine) Closed() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.closed || e.inst == nil
 }
 
 // SetOption sets an MPV option.

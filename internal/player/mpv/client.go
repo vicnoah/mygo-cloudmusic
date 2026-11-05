@@ -48,6 +48,23 @@ const (
 	EventPropertyChange  uint32 = 22
 )
 
+// EndFileReason represents the reason an MPV track stopped or ended.
+type EndFileReason int32
+
+const (
+	EndFileReasonEOF      EndFileReason = 0
+	EndFileReasonStop     EndFileReason = 2
+	EndFileReasonQuit     EndFileReason = 3
+	EndFileReasonError    EndFileReason = 4
+	EndFileReasonRedirect EndFileReason = 5
+)
+
+type cEventEndFile struct {
+	Reason          int32
+	Error           int32
+	PlaylistEntryID int64
+}
+
 type cLogMessage struct {
 	Prefix   *byte
 	Level    *byte
@@ -168,6 +185,7 @@ func NewInstance(opts ...map[string]string) (*Instance, error) {
 	inst.SetOption("prefetch-playlist", "yes")
 	inst.SetOption("demuxer-max-bytes", "64MiB")
 	inst.SetOption("demuxer-max-back-bytes", "32MiB")
+	inst.SetOption("network-timeout", "30")
 
 	if len(opts) > 0 {
 		for k, v := range opts[0] {
@@ -279,24 +297,28 @@ func (inst *Instance) CommandString(cmd string) int {
 }
 
 // WaitEvent blocks for up to timeout seconds waiting for an MPV event.
-func (inst *Instance) WaitEvent(timeout float64) (eventID uint32, errCode int32) {
+func (inst *Instance) WaitEvent(timeout float64) (eventID uint32, errCode int32, endReason EndFileReason) {
 	inst.mu.Lock()
 	h := inst.handle
 	inst.mu.Unlock()
 
 	if h == 0 {
-		return EventShutdown, 0
+		return EventShutdown, 0, 0
 	}
 
 	ev := mpvLib.waitEvent(h, timeout)
 	if ev == nil {
-		return EventNone, 0
+		return EventNone, 0, 0
 	}
 	if ev.EventID == EventLogMessage && ev.Data != nil {
 		msg := (*cLogMessage)(ev.Data)
 		fmt.Printf("[mpv-log][%s] %s: %s", goStr(msg.Level), goStr(msg.Prefix), goStr(msg.Text))
 	}
-	return ev.EventID, ev.Error
+	if ev.EventID == EventEndFile && ev.Data != nil {
+		ef := (*cEventEndFile)(ev.Data)
+		return ev.EventID, ev.Error, EndFileReason(ef.Reason)
+	}
+	return ev.EventID, ev.Error, 0
 }
 
 func cStr(s string) []byte {

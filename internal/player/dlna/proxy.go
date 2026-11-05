@@ -64,10 +64,12 @@ func NewProxy() (*Proxy, error) {
 			Transport: &http.Transport{
 				Proxy: http.ProxyFromEnvironment,
 				DialContext: (&net.Dialer{
-					Timeout:   10 * time.Second,
+					Timeout:   15 * time.Second,
 					KeepAlive: 30 * time.Second,
 				}).DialContext,
-				DisableKeepAlives: true, // Prevent socket starvation during range seeks
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 20,
+				IdleConnTimeout:     90 * time.Second,
 			},
 		},
 	}

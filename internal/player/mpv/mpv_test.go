@@ -110,6 +110,20 @@ func TestMPVEngine(t *testing.T) {
 	if len(allDevs) == 0 {
 		t.Fatal("expected package-level AudioDevices to return devices")
 	}
+
+	// Test playlist append for gapless prefetching
+	if err := engine.Append(wavFile); err != nil {
+		t.Errorf("engine.Append: %v", err)
+	}
+
+	// Test Stop and Closed
+	engine.Stop()
+	if engine.Playing() {
+		t.Error("expected playing to be false after Stop()")
+	}
+	if engine.Closed() {
+		t.Error("expected engine not to be closed after Stop()")
+	}
 }
 
 // Tests downloading the real libmpv asset from the GitHub release.

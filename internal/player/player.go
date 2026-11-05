@@ -505,7 +505,13 @@ func (p *Player) SwitchOutput(devID string) {
 
 // SetUseMPV toggles whether to prefer the MPV high-quality audio engine.
 func (p *Player) SetUseMPV(use bool) {
-	p.useMPV = use
+	if p.useMPV != use {
+		p.useMPV = use
+		if !use && p.mpvOut != nil {
+			p.mpvOut.Close()
+			p.mpvOut = nil
+		}
+	}
 }
 
 // UsingMPV reports whether the MPV high-quality audio engine is active.
@@ -779,10 +785,9 @@ func (p *Player) stop() {
 		time.AfterFunc(100*time.Millisecond, out.Close)
 	}
 	if mpvOut := p.mpvOut; mpvOut != nil {
-		mpvOut.Pause()
-		time.AfterFunc(100*time.Millisecond, mpvOut.Close)
+		mpvOut.Stop()
 	}
-	p.out, p.mpvOut, p.stream, p.info = nil, nil, nil, nil
+	p.out, p.stream, p.info = nil, nil, nil
 	p.seeking = false
 	p.fade.attach(nil, 1)
 }
@@ -919,68 +924,86 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 
 			// 2. High-quality MPV engine active.
 			if p.UsingMPV() {
-				engine, err := mpv.NewEngine(p.mpvCfg)
-				if err == nil {
-					playURL := info.URL
-					if p.Cache != nil {
-						if f := p.Cache.FilePath(t.ID, level); f != "" {
-							playURL = f
-						}
+				engine := p.mpvOut
+				if engine == nil || engine.Closed() {
+					var err error
+					engine, err = mpv.NewEngine(p.mpvCfg)
+					if err != nil {
+						p.err = err.Error()
+						p.loading = false
+						p.playing = false
+						p.sync()
+						return
 					}
-					// If streaming over network and we have a proxy, route via local proxy
-					// to solve auth headers, cookies, range requests and MIME types cleanly.
-					if (strings.HasPrefix(playURL, "http://") || strings.HasPrefix(playURL, "https://")) && p.dlnaCtrl != nil && p.dlnaCtrl.Proxy() != nil {
-						headers := http.Header{}
-						if info.Header != nil {
-							headers = info.Header()
-						}
-						ext := info.Type
-						if ext == "" {
-							ext = t.Format
-						}
-						ext = strings.TrimPrefix(ext, ".")
-						var trackID string
-						if ext != "" {
-							trackID = fmt.Sprintf("mpv-%d-%d.%s", t.ID, time.Now().UnixNano(), ext)
-						} else {
-							trackID = fmt.Sprintf("mpv-%d-%d", t.ID, time.Now().UnixNano())
-						}
-						p.dlnaCtrl.Proxy().Register(trackID, dlna.StreamSource{
-							RemoteURL:   playURL,
-							Headers:     headers,
-							ContentType: dlna.FormatToMIME(info.Type),
-						})
-						playURL = p.dlnaCtrl.Proxy().LocalURL(trackID)
+					p.mpvOut = engine
+				}
+				playURL := info.URL
+				if p.Cache != nil {
+					if f := p.Cache.FilePath(t.ID, level); f != "" {
+						playURL = f
 					}
+				}
+				// If streaming over network and we have a proxy, route via local proxy
+				// to solve auth headers, cookies, range requests and MIME types cleanly.
+				if (strings.HasPrefix(playURL, "http://") || strings.HasPrefix(playURL, "https://")) && p.dlnaCtrl != nil && p.dlnaCtrl.Proxy() != nil {
+					headers := http.Header{}
+					if info.Header != nil {
+						headers = info.Header()
+					}
+					ext := info.Type
+					if ext == "" {
+						ext = t.Format
+					}
+					ext = strings.TrimPrefix(ext, ".")
+					var trackID string
+					if ext != "" {
+						trackID = fmt.Sprintf("mpv-%d-%d.%s", t.ID, time.Now().UnixNano(), ext)
+					} else {
+						trackID = fmt.Sprintf("mpv-%d-%d", t.ID, time.Now().UnixNano())
+					}
+					p.dlnaCtrl.Proxy().Register(trackID, dlna.StreamSource{
+						RemoteURL:   playURL,
+						Headers:     headers,
+						ContentType: dlna.FormatToMIME(info.Type),
+					})
+					playURL = p.dlnaCtrl.Proxy().LocalURL(trackID)
+				}
 
-					if playURL != "" {
-						if err := engine.Play(playURL, nil, p.pending); err == nil {
-							p.mpvOut = engine
-							p.fade.attach(mpvVolumeOutput{p: p, e: p.mpvOut}, fadeLevel)
-							p.applyGain()
-							p.mpvOut.OnEnd(func() {
-								p.post(func() {
-									if gen == p.gen {
-										p.ended()
-									}
-								})
+				if playURL != "" {
+					if err := engine.Play(playURL, nil, p.pending); err == nil {
+						p.fade.attach(mpvVolumeOutput{p: p, e: p.mpvOut}, fadeLevel)
+						p.applyGain()
+						p.mpvOut.OnEnd(func() {
+							p.post(func() {
+								if gen == p.gen {
+									p.ended()
+								}
 							})
-							p.pending = 0
-							if p.playing {
-								p.mpvOut.Resume()
-								p.fade.fade(1, fadeIn, nil)
-								p.markStarted()
-							} else {
-								p.mpvOut.Pause()
-							}
-							if s != nil {
-								s.Close()
-							}
-							p.sync()
-							return
+						})
+						p.mpvOut.OnError(func(msg string) {
+							p.post(func() {
+								if gen == p.gen {
+									p.err = msg
+									p.playing = false
+									p.sync()
+								}
+							})
+						})
+						p.pending = 0
+						if p.playing {
+							p.mpvOut.Resume()
+							p.fade.fade(1, fadeIn, nil)
+							p.markStarted()
+						} else {
+							p.mpvOut.Pause()
 						}
+						if s != nil {
+							s.Close()
+						}
+						p.sync()
+						p.prefetchNextMPV(at, gen)
+						return
 					}
-					engine.Close()
 				}
 			}
 
@@ -1012,6 +1035,67 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 				p.markStarted()
 			}
 			p.sync()
+		})
+	}()
+}
+
+// prefetchNextMPV resolves and preloads the next song into MPV's gapless playlist.
+func (p *Player) prefetchNextMPV(at, gen int) {
+	if !p.UsingMPV() || p.repeat == RepeatOne || p.mpvOut == nil {
+		return
+	}
+	nextAt := at + 1
+	if nextAt >= len(p.order) {
+		if p.repeat == RepeatAll {
+			nextAt = 0
+		} else {
+			return
+		}
+	}
+	if nextAt >= len(p.order) {
+		return
+	}
+	nextTrack := p.queue[p.order[nextAt]]
+	go func() {
+		level := "exhigh"
+		if p.Quality != nil {
+			level = p.Quality()
+		}
+		info, _, err := p.open(nextTrack, level)
+		if err != nil || info == nil || info.URL == "" {
+			return
+		}
+		playURL := info.URL
+		if p.Cache != nil {
+			if f := p.Cache.FilePath(nextTrack.ID, level); f != "" {
+				playURL = f
+			}
+		}
+		if (strings.HasPrefix(playURL, "http://") || strings.HasPrefix(playURL, "https://")) && p.dlnaCtrl != nil && p.dlnaCtrl.Proxy() != nil {
+			headers := http.Header{}
+			if info.Header != nil {
+				headers = info.Header()
+			}
+			ext := info.Type
+			if ext == "" {
+				ext = nextTrack.Format
+			}
+			ext = strings.TrimPrefix(ext, ".")
+			trackID := fmt.Sprintf("mpv-%d-%d", nextTrack.ID, time.Now().UnixNano())
+			if ext != "" {
+				trackID += "." + ext
+			}
+			p.dlnaCtrl.Proxy().Register(trackID, dlna.StreamSource{
+				RemoteURL:   playURL,
+				Headers:     headers,
+				ContentType: dlna.FormatToMIME(info.Type),
+			})
+			playURL = p.dlnaCtrl.Proxy().LocalURL(trackID)
+		}
+		p.post(func() {
+			if gen == p.gen && p.mpvOut != nil && !p.mpvOut.Closed() {
+				_ = p.mpvOut.Append(playURL)
+			}
 		})
 	}()
 }
