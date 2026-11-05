@@ -111,6 +111,14 @@ func TestMPVEngine(t *testing.T) {
 		t.Fatal("expected package-level AudioDevices to return devices")
 	}
 
+	// Verify resilience & buffering options
+	if buf := engine.inst.GetProperty("audio-buffer"); buf != "1" && buf != "1.0" && buf != "1.000000" {
+		t.Errorf("got audio-buffer %q, want ~1.0", buf)
+	}
+	if maxBytes := engine.inst.GetProperty("demuxer-max-bytes"); maxBytes == "" || maxBytes == "0" {
+		t.Errorf("expected demuxer-max-bytes to be non-empty, got %q", maxBytes)
+	}
+
 	// Test playlist append for gapless prefetching
 	if err := engine.Append(wavFile); err != nil {
 		t.Errorf("engine.Append: %v", err)

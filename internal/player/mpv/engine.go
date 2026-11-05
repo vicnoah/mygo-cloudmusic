@@ -94,6 +94,12 @@ func NewEngine(cfg Config) (*Engine, error) {
 	if cfg.NullAO {
 		opts["ao"] = "null"
 	}
+	if cfg.Exclusive {
+		opts["audio-exclusive"] = "yes"
+	}
+	if cfg.AudioDevice != "" {
+		opts["audio-device"] = cfg.AudioDevice
+	}
 	inst, err := NewInstance(opts)
 	if err != nil {
 		return nil, err
@@ -204,7 +210,7 @@ func (e *Engine) Seek(pos time.Duration) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.inst != nil {
-		e.inst.Command([]string{"seek", fmt.Sprintf("%.3f", pos.Seconds()), "absolute"})
+		e.inst.Command([]string{"seek", fmt.Sprintf("%.3f", pos.Seconds()), "absolute+exact"})
 		e.position = pos
 	}
 }
