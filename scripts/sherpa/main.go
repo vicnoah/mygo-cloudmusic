@@ -40,7 +40,7 @@ const version = "2.0.1"
 // release is the tag of the app's release the files are uploaded to.
 const release = "sherpa-onnx-" + version
 
-const repo = "egoist/mygo-cloudmusic"
+const repo = "vicnoah/mygo-cloudmusic"
 
 // An archive of sherpa-onnx's release, and the libraries the app takes
 // from it, the C API's first.
@@ -73,13 +73,9 @@ const (
 )
 
 func main() {
-	sign := flag.String("sign", "", "the Developer ID that signs the macOS libraries")
+	sign := flag.String("sign", "", "the Developer ID that signs the macOS libraries (optional)")
 	out := flag.String("out", "build/sherpa", "where to write the files to upload")
 	flag.Parse()
-	if *sign == "" {
-		fmt.Fprintln(os.Stderr, "sherpa: -sign is required: the app's hardened runtime loads no library signed by another team")
-		os.Exit(2)
-	}
 	if err := run(*sign, *out); err != nil {
 		fmt.Fprintln(os.Stderr, "sherpa:", err)
 		os.Exit(1)
@@ -135,7 +131,7 @@ func run(identity, out string) error {
 		}
 		for _, name := range a.files {
 			lib := filepath.Join(tmp, name)
-			if strings.HasPrefix(p, "darwin-") {
+			if strings.HasPrefix(p, "darwin-") && identity != "" {
 				cmd := exec.Command("codesign", "--force", "--sign", identity, "--options", "runtime", "--timestamp", lib)
 				if b, err := cmd.CombinedOutput(); err != nil {
 					return fmt.Errorf("codesign %s/%s: %v\n%s", p, name, err, b)
