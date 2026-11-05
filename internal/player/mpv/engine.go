@@ -159,6 +159,9 @@ func (e *Engine) Play(sourceURL string, headers map[string]string, startPos time
 		return fmt.Errorf("mpv: loadfile failed with error %d", code)
 	}
 
+	e.position = startPos
+	e.duration = 0
+
 	// If start position is specified, seek right away
 	if startPos > 0 {
 		e.inst.Command([]string{"seek", fmt.Sprintf("%.3f", startPos.Seconds()), "absolute"})
@@ -401,6 +404,8 @@ func (e *Engine) Stop() {
 	defer e.mu.Unlock()
 	if e.inst != nil && !e.closed {
 		e.playing = false
+		e.position = 0
+		e.duration = 0
 		e.inst.Command([]string{"stop"})
 	}
 }

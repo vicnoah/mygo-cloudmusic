@@ -243,3 +243,17 @@ func TestEndRadio(t *testing.T) {
 		t.Error("asked the radio after leaving it")
 	}
 }
+
+// While loading a new track, Position returns pending (0 by default) rather than old position.
+func TestPositionWhileLoading(t *testing.T) {
+	_, p := posted()
+	p.loading = true
+	p.pending = 0
+	if pos := p.Position(); pos != 0 {
+		t.Fatalf("Position while loading = %v, want 0", pos)
+	}
+	p.pending = 15 * time.Second
+	if pos := p.Position(); pos != 15*time.Second {
+		t.Fatalf("Position while loading with pending = %v, want 15s", pos)
+	}
+}

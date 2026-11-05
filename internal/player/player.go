@@ -741,6 +741,8 @@ func (p *Player) Position() time.Duration {
 	case p.IsCasting():
 		_, pos, _ := p.dlnaCtrl.Status()
 		return pos
+	case p.loading:
+		return p.pending
 	case p.mpvOut != nil:
 		return p.mpvOut.Position()
 	case p.out == nil:
