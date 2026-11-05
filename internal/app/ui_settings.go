@@ -75,26 +75,26 @@ func (a *app) settingsView(c *ui.Context) {
 		}
 		row := func(label, desc string, control func()) {
 			ui.Row(c).Padding(12, 16).Gap(16).AlignItems(ui.Center).MinHeight(48).Children(func() {
-				if strings.HasPrefix(label, "当前版本") {
-					b := ui.ButtonBase(c.Key("version-click")).Grow(1).Shrink(1).MinWidth(0).FocusRing(false).Label(label).Children(func() {
-						ui.Column(c).Gap(3).Children(func() {
-							ui.Text(c, label).FontSize(13.5).FontWeight(500)
-							if desc != "" {
-								ui.Text(c, desc).FontSize(12).TextColor(p.muted).LineHeight(1.4)
-							}
+				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
+					if strings.HasPrefix(label, "当前版本") {
+						b := ui.ButtonBase(c.Key("version-click")).FocusRing(false).Justify(ui.Start).AlignItems(ui.Start).Label(label).Children(func() {
+							ui.Column(c).AlignItems(ui.Start).Gap(3).Children(func() {
+								ui.Text(c, label).FontSize(13.5).FontWeight(500)
+								if desc != "" {
+									ui.Text(c, desc).FontSize(12).TextColor(p.muted).LineHeight(1.4)
+								}
+							})
 						})
-					})
-					if b.Clicked() {
-						a.onVersionClicked()
-					}
-				} else {
-					ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
+						if b.Clicked() {
+							a.onVersionClicked()
+						}
+					} else {
 						ui.Text(c, label).FontSize(13.5).FontWeight(500)
 						if desc != "" {
 							ui.Text(c, desc).FontSize(12).TextColor(p.muted).LineHeight(1.4)
 						}
-					})
-				}
+					}
+				})
 				control()
 			})
 		}
@@ -286,7 +286,7 @@ func (a *app) settingsView(c *ui.Context) {
 						setUpdateDownloads(on)
 					}
 				})
-				row("当前版本 "+mygo.App.Version(), "", func() {
+				row("当前版本 "+mygo.App.Version(), a.versionDesc(), func() {
 					if ui.Button(c.Key("check-updates"), "检查更新").Clicked() {
 						checkForUpdates()
 					}
@@ -294,7 +294,7 @@ func (a *app) settingsView(c *ui.Context) {
 			})
 		} else {
 			group("关于", func() {
-				row("当前版本 "+mygo.App.Version(), "", func() {})
+				row("当前版本 "+mygo.App.Version(), a.versionDesc(), func() {})
 			})
 		}
 	})

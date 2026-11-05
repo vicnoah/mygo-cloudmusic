@@ -360,15 +360,26 @@ func (a *app) onVersionClicked() {
 			a.settingsWin.Invalidate()
 		}
 	} else if a.devClicks >= 3 {
-		remaining := 5 - a.devClicks
-		if a.settings.DeveloperMode {
-			a.toast = fmt.Sprintf("再点击 %d 次关闭开发者模式", remaining)
-		} else {
-			a.toast = fmt.Sprintf("再点击 %d 次开启开发者模式", remaining)
-		}
 		a.redraw()
 		if a.settingsWin != nil {
 			a.settingsWin.Invalidate()
 		}
 	}
+}
+
+func (a *app) versionDesc() string {
+	if a.devClicks >= 3 && a.devClicks < 5 {
+		if time.Since(a.devClickTime) <= 3*time.Second {
+			remaining := 5 - a.devClicks
+			if a.settings.DeveloperMode {
+				return fmt.Sprintf("再点击 %d 次关闭开发者模式", remaining)
+			}
+			return fmt.Sprintf("再点击 %d 次开启开发者模式", remaining)
+		}
+		a.devClicks = 0
+	}
+	if a.settings.DeveloperMode {
+		return "开发者模式已开启（已解锁网易云与 QQ 音乐）"
+	}
+	return ""
 }

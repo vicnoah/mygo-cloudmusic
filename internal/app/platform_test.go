@@ -185,6 +185,15 @@ func TestDeveloperModeToggle(t *testing.T) {
 		if a.settings.DeveloperMode {
 			t.Fatalf("developer mode enabled prematurely at click %d", i)
 		}
+		if a.toast != "" {
+			t.Fatalf("unexpected toast on intermediate click %d: %q", i, a.toast)
+		}
+		if i == 3 && a.versionDesc() != "再点击 2 次开启开发者模式" {
+			t.Fatalf("unexpected desc on click 3: %q", a.versionDesc())
+		}
+		if i == 4 && a.versionDesc() != "再点击 1 次开启开发者模式" {
+			t.Fatalf("unexpected desc on click 4: %q", a.versionDesc())
+		}
 	}
 	a.onVersionClicked() // 5th click
 	if !a.settings.DeveloperMode {
@@ -195,10 +204,17 @@ func TestDeveloperModeToggle(t *testing.T) {
 	}
 
 	// 5 more clicks to disable
+	a.toast = ""
 	for i := 1; i <= 4; i++ {
 		a.onVersionClicked()
 		if !a.settings.DeveloperMode {
 			t.Fatalf("developer mode disabled prematurely at click %d", i)
+		}
+		if a.toast != "" {
+			t.Fatalf("unexpected toast on disable click %d: %q", i, a.toast)
+		}
+		if i == 3 && a.versionDesc() != "再点击 2 次关闭开发者模式" {
+			t.Fatalf("unexpected desc on disable click 3: %q", a.versionDesc())
 		}
 	}
 	a.onVersionClicked() // 5th click

@@ -246,26 +246,26 @@ func (h platformHost) SharedSettings(c *ui.Context) {
 	}
 	row := func(key, label, desc string, control func()) {
 		ui.Row(c.Key(key)).Padding(12, 16).Gap(16).AlignItems(ui.Center).MinHeight(48).Children(func() {
-			if key == "shared-version" {
-				b := ui.ButtonBase(c.Key("shared-version-btn")).Grow(1).Shrink(1).MinWidth(0).FocusRing(false).Label(label).Children(func() {
-					ui.Column(c).Gap(3).Children(func() {
-						ui.Text(c, label).FontSize(13.5).FontWeight(500)
-						if desc != "" {
-							ui.Text(c, desc).FontSize(12).TextColor(p.muted)
-						}
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
+				if key == "shared-version" {
+					b := ui.ButtonBase(c.Key("shared-version-btn")).FocusRing(false).Justify(ui.Start).AlignItems(ui.Start).Label(label).Children(func() {
+						ui.Column(c).AlignItems(ui.Start).Gap(3).Children(func() {
+							ui.Text(c, label).FontSize(13.5).FontWeight(500)
+							if desc != "" {
+								ui.Text(c, desc).FontSize(12).TextColor(p.muted)
+							}
+						})
 					})
-				})
-				if b.Clicked() {
-					a.onVersionClicked()
-				}
-			} else {
-				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
+					if b.Clicked() {
+						a.onVersionClicked()
+					}
+				} else {
 					ui.Text(c, label).FontSize(13.5).FontWeight(500)
 					if desc != "" {
 						ui.Text(c, desc).FontSize(12).TextColor(p.muted)
 					}
-				})
-			}
+				}
+			})
 			control()
 		})
 	}
@@ -435,7 +435,7 @@ func (h platformHost) SharedSettings(c *ui.Context) {
 					setUpdateDownloads(on)
 				}
 			})
-			row("shared-version", "当前版本 "+mygo.App.Version(), "", func() {
+			row("shared-version", "当前版本 "+mygo.App.Version(), a.versionDesc(), func() {
 				if ui.Button(c.Key("shared-check-updates"), "检查更新").Clicked() {
 					checkForUpdates()
 				}
@@ -443,7 +443,7 @@ func (h platformHost) SharedSettings(c *ui.Context) {
 		})
 	} else {
 		group("关于", func() {
-			row("shared-version", "当前版本 "+mygo.App.Version(), "", func() {})
+			row("shared-version", "当前版本 "+mygo.App.Version(), a.versionDesc(), func() {})
 		})
 	}
 }
