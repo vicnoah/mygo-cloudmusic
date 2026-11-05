@@ -18,6 +18,7 @@ type TrackMeta struct {
 	Artist          string
 	Album           string
 	CoverURL        string
+	CoverData       []byte // Raw cover bytes (for custom schemes like fnmusic:// or pre-resolved covers)
 	StreamURL       string
 	LocalFile       string
 	Format          string
@@ -288,7 +289,10 @@ func (c *Controller) PlayTrack(ctx context.Context, meta TrackMeta, startPos tim
 
 	// Register and route cover image through local proxy so smart TVs / screen renderers can safely fetch it on LAN
 	coverURI := meta.CoverURL
-	if meta.CoverURL != "" {
+	if len(meta.CoverData) > 0 {
+		c.proxy.RegisterCoverData(meta.ID, meta.CoverData)
+		coverURI = c.proxy.LANCoverURLFor(meta.ID, dev.URL)
+	} else if meta.CoverURL != "" {
 		c.proxy.RegisterCover(meta.ID, meta.CoverURL)
 		coverURI = c.proxy.LANCoverURLFor(meta.ID, dev.URL)
 	}
@@ -376,7 +380,10 @@ func (c *Controller) SetNextTrack(ctx context.Context, meta TrackMeta) error {
 
 	lanURL := c.proxy.LANURLFor(meta.ID, dev.URL, meta.Format)
 	coverURI := meta.CoverURL
-	if meta.CoverURL != "" {
+	if len(meta.CoverData) > 0 {
+		c.proxy.RegisterCoverData(meta.ID, meta.CoverData)
+		coverURI = c.proxy.LANCoverURLFor(meta.ID, dev.URL)
+	} else if meta.CoverURL != "" {
 		c.proxy.RegisterCover(meta.ID, meta.CoverURL)
 		coverURI = c.proxy.LANCoverURLFor(meta.ID, dev.URL)
 	}

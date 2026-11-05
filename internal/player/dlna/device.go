@@ -27,10 +27,12 @@ type Device struct {
 	URL          string
 	LastSeen     time.Time
 
-	mr     *device.MediaRenderer
-	av     *avtransport.Client
-	rc     *renderingcontrol.Client
-	rcOnce sync.Once
+	mr      *device.MediaRenderer
+	av      *avtransport.Client
+	rc      *renderingcontrol.Client
+	rcOnce  sync.Once
+	avCtrl  string
+	avEvent string
 }
 
 // retryHandler retries transient SOAP failures up to 3 times, matching Supersonic's resilience pattern.
@@ -152,6 +154,34 @@ func findServiceURLs(d *rawDeviceXML, baseURL *url.URL) (name, model, avCtrl, av
 	return
 }
 
+func resolveDeviceURLs(location string) (avCtrl, avEvent, rcCtrl string) {
+	parsedBase, err := url.Parse(location)
+	if err != nil || parsedBase.Host == "" {
+		return "", "", ""
+	}
+
+	reqCtx, cancelReq := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelReq()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, location, nil)
+	if err != nil {
+		return "", "", ""
+	}
+	req.Header.Set("Connection", "close")
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+	if err != nil {
+		return "", "", ""
+	}
+	defer resp.Body.Close()
+
+	var root rootXML
+	if err := xml.NewDecoder(resp.Body).Decode(&root); err != nil {
+		return "", "", ""
+	}
+
+	_, _, avCtrl, avEvent, rcCtrl = findServiceURLs(&root.Device, parsedBase)
+	return avCtrl, avEvent, rcCtrl
+}
+
 // Discover searches for MediaRenderer devices on the LAN.
 // It uses both go-upnpcast's built-in discovery and raw SSDP parsing to ensure devices
 // that advertise MediaRenderer:1, MediaRenderer:2, or generic UPnP rootdevice are discovered.
@@ -193,6 +223,7 @@ func Discover(ctx context.Context, waitSec int) ([]*Device, error) {
 		if name == "" {
 			name = "DLNA 设备"
 		}
+		avCtrl, avEvent, _ := resolveDeviceURLs(mr.URL)
 		devices = append(devices, &Device{
 			ID:           mr.URL,
 			FriendlyName: name,
@@ -202,6 +233,8 @@ func Discover(ctx context.Context, waitSec int) ([]*Device, error) {
 			mr:           mr,
 			av:           av,
 			rc:           rc,
+			avCtrl:       avCtrl,
+			avEvent:      avEvent,
 		})
 	}
 
@@ -274,6 +307,8 @@ func Discover(ctx context.Context, waitSec int) ([]*Device, error) {
 				LastSeen:     now,
 				av:           av,
 				rc:           rc,
+				avCtrl:       avCtrl,
+				avEvent:      avEvent,
 			})
 		}
 	}
@@ -333,7 +368,7 @@ func (d *Device) SetMedia(ctx context.Context, item *avtransport.MediaItem) erro
 
 	// Attempt SetAVTransportMedia directly without preemptive Stop.
 	// Sending Stop to an idle or stopped renderer causes error 701 on many devices (e.g. XiaoAi).
-	err := d.av.SetAVTransportMedia(ctx, item)
+	err := d.setAVTransportMediaEnhanced(ctx, item)
 	if err != nil {
 		stopCtx, stopCancel := context.WithTimeout(ctx, 1*time.Second)
 		_ = d.av.Stop(stopCtx)
@@ -345,7 +380,7 @@ func (d *Device) SetMedia(ctx context.Context, item *avtransport.MediaItem) erro
 		case <-time.After(150 * time.Millisecond):
 		}
 
-		err = d.av.SetAVTransportMedia(ctx, item)
+		err = d.setAVTransportMediaEnhanced(ctx, item)
 	}
 
 	if err != nil {
@@ -367,6 +402,71 @@ func (d *Device) SetNextMedia(ctx context.Context, item *avtransport.MediaItem) 
 	if d.av == nil {
 		return errors.New("dlna: av transport client not available")
 	}
+	return d.setNextAVTransportMediaEnhanced(ctx, item)
+}
+
+func (d *Device) setAVTransportMediaEnhanced(ctx context.Context, item *avtransport.MediaItem) error {
+	if d.avCtrl == "" || d.av == nil {
+		if d.av != nil {
+			return d.av.SetAVTransportMedia(ctx, item)
+		}
+		return errors.New("dlna: av transport client not available")
+	}
+
+	didl := buildEnhancedDIDLLite(item)
+	body := buildSetAVTransportSOAP(item.URL, didl)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.avCtrl, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
+	req.Header.Set("SOAPAction", `"urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI"`)
+	req.Header.Set("Connection", "close")
+
+	resp, err := d.av.RequestHandler.Do(req)
+	if err != nil {
+		return d.av.SetAVTransportMedia(ctx, item)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+
+	// If device rejected the enhanced payload (SOAP Fault), fallback to upstream standard implementation
+	return d.av.SetAVTransportMedia(ctx, item)
+}
+
+func (d *Device) setNextAVTransportMediaEnhanced(ctx context.Context, item *avtransport.MediaItem) error {
+	if d.avCtrl == "" || d.av == nil {
+		if d.av != nil {
+			return d.av.SetNextAVTransportMedia(ctx, item)
+		}
+		return errors.New("dlna: av transport client not available")
+	}
+
+	didl := buildEnhancedDIDLLite(item)
+	body := buildSetNextAVTransportSOAP(item.URL, didl)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.avCtrl, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
+	req.Header.Set("SOAPAction", `"urn:schemas-upnp-org:service:AVTransport:1#SetNextAVTransportURI"`)
+	req.Header.Set("Connection", "close")
+
+	resp, err := d.av.RequestHandler.Do(req)
+	if err != nil {
+		return d.av.SetNextAVTransportMedia(ctx, item)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+
 	return d.av.SetNextAVTransportMedia(ctx, item)
 }
 

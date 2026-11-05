@@ -1,5 +1,12 @@
 # 更新日志
 
+## 0.2.20
+
+- 优化智能电视 DLNA 投播封面与非 JPEG 格式自动转码：
+  - 智能电视投播元数据增强：补齐封面 URL 静态 `.jpg` 后缀与 DIDL-Lite 多标签兼容规范（同时支持 `<upnp:albumArtURI dlna:profileID="JPEG_MED">`、`<upnp:icon>` 及电视专用图片 `<res>` 资源节点，广泛适配小米电视、华为智慧屏、索尼、三星、乐播投屏等）
+  - 支持飞牛音乐（fnmusic）、Subsonic 等自定义虚拟协议封面的投播提取与本地代理转发
+  - 内置图片格式自动转码引擎：自动将非 JPEG 图片（PNG、WebP、GIF 等）在内存中转码为电视标准 JPEG（`image/jpeg`），彻底解决智能电视接收端因格式不支持导致的封面留白问题
+
 ## 0.2.19
 
 - 自动配置 DLNA Windows 防火墙：

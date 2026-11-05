@@ -1,17 +1,26 @@
 package dlna
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	_ "golang.org/x/image/webp"
 )
 
 // StreamSource provides audio data or a remote URL for a track being cast to DLNA.
@@ -39,6 +48,7 @@ type Proxy struct {
 	port          int
 	sources       map[string]StreamSource
 	covers        map[string]string
+	coverBytes    map[string][]byte
 	activeCancels map[string]map[uint64]context.CancelFunc
 	nextReqID     uint64
 	client        *http.Client
@@ -59,6 +69,7 @@ func NewProxy() (*Proxy, error) {
 		port:          l.Addr().(*net.TCPAddr).Port,
 		sources:       make(map[string]StreamSource),
 		covers:        make(map[string]string),
+		coverBytes:    make(map[string][]byte),
 		activeCancels: make(map[string]map[uint64]context.CancelFunc),
 		client: &http.Client{
 			Transport: &http.Transport{
@@ -154,10 +165,43 @@ func (p *Proxy) RegisterCover(trackID string, coverURL string) {
 	p.covers[trackID] = coverURL
 }
 
+// convertToJPEG converts any supported image format (PNG, WebP, GIF, etc.) into standard JPEG.
+// If the input data is already a valid JPEG (magic bytes FF D8 FF), it returns without re-encoding.
+func convertToJPEG(data []byte) ([]byte, error) {
+	if len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
+		return data, nil
+	}
+
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return data, err
+	}
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err != nil {
+		return data, err
+	}
+	return buf.Bytes(), nil
+}
+
+// RegisterCoverData registers raw cover image bytes (e.g. from Feiniu Music, Subsonic, or local files).
+// Non-JPEG images (PNG, WebP, GIF) are automatically transcoded to standard JPEG.
+func (p *Proxy) RegisterCoverData(trackID string, data []byte) {
+	if trackID == "" || len(data) == 0 {
+		return
+	}
+	if jpegData, err := convertToJPEG(data); err == nil {
+		data = jpegData
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.coverBytes[trackID] = data
+}
+
 // LANCoverURLFor returns the LAN cover URL reachable by targetURL.
 func (p *Proxy) LANCoverURLFor(trackID, targetURL string) string {
 	ip := p.detectLANIPFor(targetURL)
-	return fmt.Sprintf("http://%s:%d/cover/%s", ip, p.port, trackID)
+	return fmt.Sprintf("http://%s:%d/cover/%s.jpg", ip, p.port, trackID)
 }
 
 // Register registers or updates a stream source for a track, returning its DLNA LAN URL.
@@ -433,48 +477,119 @@ func (p *Proxy) Port() int {
 }
 
 func (p *Proxy) handleCover(w http.ResponseWriter, r *http.Request) {
+	// CORS headers for smart TV webview / JS / Android receivers
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "*")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	key := strings.TrimPrefix(r.URL.Path, "/cover/")
+	rawKey := key
+	if ext := filepath.Ext(key); ext != "" {
+		rawKey = strings.TrimSuffix(key, ext)
+	}
+
 	p.mu.RLock()
-	coverURL := p.covers[key]
+	cachedData := p.coverBytes[rawKey]
+	coverURL := p.covers[rawKey]
+	if cachedData == nil && coverURL == "" {
+		cachedData = p.coverBytes[key]
+		coverURL = p.covers[key]
+	}
 	p.mu.RUnlock()
+
+	// Set DLNA standard Interactive mode headers
+	w.Header().Set("transferMode.dlna.org", "Interactive")
+	w.Header().Set("contentFeatures.dlna.org", "DLNA.ORG_PN=JPEG_MED;DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=00900000000000000000000000000000")
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Content-Type", "image/jpeg")
+
+	// 1. If we already have pre-resolved or cached JPEG bytes (e.g. from Feiniu Music), serve them directly.
+	if len(cachedData) > 0 {
+		w.Header().Set("Content-Length", strconv.Itoa(len(cachedData)))
+		w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(cachedData)
+		}
+		return
+	}
 
 	if coverURL == "" {
 		http.NotFound(w, r)
 		return
 	}
 
-	// 1. If coverURL is a local file on disk, serve it directly.
+	// 2. If coverURL is a local file on disk, read, ensure JPEG, and serve.
 	if strings.HasPrefix(coverURL, "/") || (len(coverURL) > 3 && coverURL[1] == ':') {
-		http.ServeFile(w, r, coverURL)
+		data, err := os.ReadFile(coverURL)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		if jpegData, err := convertToJPEG(data); err == nil {
+			data = jpegData
+		}
+		p.mu.Lock()
+		p.coverBytes[rawKey] = data
+		p.mu.Unlock()
+
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(data)
+		}
 		return
 	}
 
-	// 2. If coverURL is a remote HTTP URL, proxy it with timeout and caching.
-	req, err := http.NewRequestWithContext(r.Context(), "GET", coverURL, nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 3. If coverURL is a remote HTTP URL, fetch it, transcode non-JPEG (PNG, WebP) to JPEG, and cache.
+	if strings.HasPrefix(coverURL, "http://") || strings.HasPrefix(coverURL, "https://") {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, coverURL, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		req.Header.Set("User-Agent", defaultUserAgent)
+
+		resp, err := p.client.Do(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			http.Error(w, resp.Status, resp.StatusCode)
+			return
+		}
+
+		rawBytes, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if jpegBytes, err := convertToJPEG(rawBytes); err == nil {
+			rawBytes = jpegBytes
+		}
+
+		p.mu.Lock()
+		p.coverBytes[rawKey] = rawBytes
+		p.mu.Unlock()
+
+		w.Header().Set("Content-Length", strconv.Itoa(len(rawBytes)))
+		w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(rawBytes)
+		}
 		return
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
 
-	resp, err := p.client.Do(req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
-	} else {
-		w.Header().Set("Content-Type", "image/jpeg")
-	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	if cl := resp.Header.Get("Content-Length"); cl != "" {
-		w.Header().Set("Content-Length", cl)
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	http.NotFound(w, r)
 }
 
 // LANIP returns the discovered LAN IP.

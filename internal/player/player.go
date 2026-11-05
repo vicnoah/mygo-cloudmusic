@@ -910,12 +910,19 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 					bitrate = int(info.Size / durSec)
 				}
 				trackID := fmt.Sprintf("%d", t.ID)
+				var coverData []byte
+				if t.Source != "" || strings.HasPrefix(t.Album.PicURL, "fnmusic://") || strings.HasPrefix(t.Album.PicURL, "subsonic://") || strings.HasPrefix(t.Album.PicURL, "songloft://") {
+					if b, err := p.resolveArtwork(&t); err == nil && len(b) > 0 {
+						coverData = b
+					}
+				}
 				meta := dlna.TrackMeta{
 					ID:              trackID,
 					Title:           t.Name,
 					Artist:          t.ArtistNames(),
 					Album:           t.Album.Name,
 					CoverURL:        netease.Sized(t.Album.PicURL, 600),
+					CoverData:       coverData,
 					StreamURL:       info.URL,
 					LocalFile:       localFile,
 					Format:          info.Type,
@@ -1170,12 +1177,19 @@ func (p *Player) prefetchNextDLNA(at, gen int) {
 		if durSec > 0 && info.Size > 0 {
 			bitrate = int(info.Size / durSec)
 		}
+		var coverData []byte
+		if nextTrack.Source != "" || strings.HasPrefix(nextTrack.Album.PicURL, "fnmusic://") || strings.HasPrefix(nextTrack.Album.PicURL, "subsonic://") || strings.HasPrefix(nextTrack.Album.PicURL, "songloft://") {
+			if b, err := p.resolveArtwork(&nextTrack); err == nil && len(b) > 0 {
+				coverData = b
+			}
+		}
 		meta := dlna.TrackMeta{
 			ID:              fmt.Sprintf("%d", nextTrack.ID),
 			Title:           nextTrack.Name,
 			Artist:          nextTrack.ArtistNames(),
 			Album:           nextTrack.Album.Name,
 			CoverURL:        netease.Sized(nextTrack.Album.PicURL, 600),
+			CoverData:       coverData,
 			StreamURL:       info.URL,
 			LocalFile:       localFile,
 			Format:          info.Type,

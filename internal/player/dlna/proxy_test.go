@@ -1,13 +1,21 @@
 package dlna
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/supersonic-app/go-upnpcast/services/avtransport"
 )
 
 // Tests that the DLNA proxy starts, registers sources, and serves byte ranges for local files.
@@ -222,9 +230,123 @@ func TestDLNAProxyCover(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("got status %d, want 200", resp.StatusCode)
 	}
+	if !strings.HasSuffix(coverURL, ".jpg") {
+		t.Errorf("coverURL %q should have .jpg suffix", coverURL)
+	}
+	if cors := resp.Header.Get("Access-Control-Allow-Origin"); cors != "*" {
+		t.Errorf("got CORS header %q, want *", cors)
+	}
+	if transfer := resp.Header.Get("transferMode.dlna.org"); transfer != "Interactive" {
+		t.Errorf("got transferMode %q, want Interactive", transfer)
+	}
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != string(coverData) {
 		t.Errorf("got body %q, want %q", string(body), string(coverData))
+	}
+
+	// 2. HEAD request test
+	headResp, err := http.Head(coverURL)
+	if err != nil {
+		t.Fatalf("HEAD cover URL: %v", err)
+	}
+	defer headResp.Body.Close()
+	if headResp.StatusCode != http.StatusOK {
+		t.Errorf("HEAD got status %d, want 200", headResp.StatusCode)
+	}
+	if ct := headResp.Header.Get("Content-Type"); !strings.Contains(ct, "image/") {
+		t.Errorf("HEAD got Content-Type %q", ct)
+	}
+
+	// 3. Request without extension backwards-compatibility
+	rawURL := strings.TrimSuffix(coverURL, ".jpg")
+	rawResp, err := http.Get(rawURL)
+	if err != nil {
+		t.Fatalf("GET raw cover URL: %v", err)
+	}
+	defer rawResp.Body.Close()
+	if rawResp.StatusCode != http.StatusOK {
+		t.Errorf("GET raw URL got status %d, want 200", rawResp.StatusCode)
+	}
+}
+
+// Tests that enhanced DIDL-Lite metadata contains compatible artwork tags for Smart TVs.
+func TestEnhancedDIDLLiteMetadata(t *testing.T) {
+	item := &avtransport.MediaItem{
+		URL:         "http://192.168.1.10:50000/stream/123.mp3",
+		Title:       "Test Song",
+		Artist:      "Test Artist",
+		Album:       "Test Album",
+		AlbumArtURI: "http://192.168.1.10:50000/cover/123.jpg",
+		ContentType: "audio/mpeg",
+		Duration:    180 * time.Second,
+	}
+
+	didl := buildEnhancedDIDLLite(item)
+
+	expectedSnippets := []string{
+		`<upnp:albumArtURI dlna:profileID="JPEG_MED"`,
+		`<upnp:albumArtURI dlna:profileID="JPEG_TN"`,
+		`<upnp:icon>http://192.168.1.10:50000/cover/123.jpg</upnp:icon>`,
+		`<res protocolInfo="http-get:*:image/jpeg:DLNA.ORG_PN=JPEG_MED;DLNA.ORG_FLAGS=00900000000000000000000000000000">http://192.168.1.10:50000/cover/123.jpg</res>`,
+		`<res protocolInfo="http-get:*:image/jpeg:*">http://192.168.1.10:50000/cover/123.jpg</res>`,
+		`<upnp:class>object.item.audioItem.musicTrack</upnp:class>`,
+		`<dc:title>Test Song</dc:title>`,
+	}
+
+	for _, snippet := range expectedSnippets {
+		if !strings.Contains(didl, snippet) {
+			t.Errorf("DIDL-Lite missing expected snippet %q\nFull XML:\n%s", snippet, didl)
+		}
+	}
+}
+
+// Tests that non-JPEG covers (e.g. PNG from Feiniu Music, Subsonic, or local files)
+// are automatically transcoded to JPEG for DLNA TV compatibility.
+func TestDLNAProxyNonJPEGTranscoding(t *testing.T) {
+	proxy, err := NewProxy()
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	defer proxy.Close()
+
+	// 1. Create a dummy PNG image
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for x := 0; x < 4; x++ {
+		for y := 0; y < 4; y++ {
+			img.Set(x, y, color.RGBA{R: 255, G: 0, B: 0, A: 255})
+		}
+	}
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, img); err != nil {
+		t.Fatalf("png.Encode: %v", err)
+	}
+
+	// 2. Register cover data under a custom scheme URL like Feiniu Music
+	trackID := "fnmusic-track-999"
+	proxy.RegisterCover(trackID, "fnmusic://cover/999")
+	proxy.RegisterCoverData(trackID, pngBuf.Bytes())
+
+	coverURL := proxy.LANCoverURLFor(trackID, "http://192.168.1.50:1400/desc.xml")
+	resp, err := http.Get(coverURL)
+	if err != nil {
+		t.Fatalf("GET cover URL: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "image/jpeg" {
+		t.Errorf("got Content-Type %q, want image/jpeg", ct)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	// Verify JPEG magic bytes: 0xFF, 0xD8, 0xFF
+	if len(body) < 3 || body[0] != 0xFF || body[1] != 0xD8 || body[2] != 0xFF {
+		t.Errorf("expected JPEG magic bytes FF D8 FF, got %x", body[:min(len(body), 8)])
 	}
 }
 
