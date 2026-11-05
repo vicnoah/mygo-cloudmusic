@@ -105,8 +105,10 @@ type settings struct {
 	// "stereo", or an explicit speaker whitelist for multichannel output.
 	// It is kept for settings written before SpatialMode existed.
 	MPVAudioChannels string `json:"mpvAudioChannels,omitempty"`
-	// MPVAudioSpdif passes E-AC-3 through to an HDMI receiver instead of
-	// decoding its core in MPV.
+	// MPVAudioSpdif attempts E-AC-3 passthrough when a specific HDMI/SPDIF
+	// receiver is selected. Built-in speakers and "auto" stay on MPV's
+	// normal decoder; the engine also falls back to PCM if a receiver
+	// rejects compressed passthrough.
 	MPVAudioSpdif bool `json:"mpvAudioSpdif,omitempty"`
 	// SpatialMode is how multichannel streams are rendered: "auto",
 	// "speakers", "headphones" or "stereo".

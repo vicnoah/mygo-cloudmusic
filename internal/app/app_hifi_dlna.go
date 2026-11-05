@@ -14,10 +14,7 @@ func (a *app) syncMPVSettings() {
 	if a.pl == nil {
 		return
 	}
-	spdif := ""
-	if a.settings.MPVAudioSpdif {
-		spdif = "eac3"
-	}
+	spdif := a.audioSpdifValue()
 	mode := a.settings.spatialMode()
 	channels := a.settings.MPVAudioChannels
 	switch mode {
@@ -44,6 +41,31 @@ func (a *app) syncMPVSettings() {
 		EqualizerGains:   a.settings.EqualizerGains,
 	})
 	a.pl.SetEqualizer(a.settings.EqualizerPreamp, a.settings.EqualizerGains, a.settings.EqualizerEnabled)
+}
+
+// audioSpdifValue returns the MPV audio-spdif value only when the user has
+// explicitly selected an HDMI/SPDIF receiver. Built-in speakers and "auto"
+// must stay on MPV's normal decoder: they expose only PCM substreams, so
+// forcing compressed passthrough makes CoreAudio fail before E-AC-3 can be
+// decoded. The MPV engine also retries without passthrough if a receiver
+// rejects the stream.
+func (a *app) audioSpdifValue() string {
+	if !a.settings.MPVAudioSpdif || a.pl == nil {
+		return ""
+	}
+	dev := a.settings.MPVAudioDevice
+	if dev == "" || dev == "auto" {
+		return ""
+	}
+	for _, d := range a.pl.AudioDevices() {
+		if d.Name == dev {
+			if mpv.SpdifCapableDevice(d) {
+				return "eac3"
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 func (a *app) mpvReady() bool {
@@ -256,7 +278,13 @@ func (a *app) renderHifiSettings(c *ui.Context, group func(title string, rows fu
 					}
 				})
 			}
-			row("hifi-mpv-spdif", "杜比 E-AC-3 直通", "将杜比全景声的 E-AC-3 原样交给 HDMI 功放解码；仅在功放支持 Atmos 时开启", func() {
+			spdifDesc := "内置扬声器会自动把 E-AC-3 解为 PCM；只有已选择具体 HDMI/SPDIF 接收器时才尝试直通，若设备拒绝会自动回退到 PCM 解码"
+			if a.audioSpdifValue() != "" {
+				spdifDesc = "已选择 HDMI/SPDIF 输出，将尝试把 E-AC-3 原样交给功放；若设备拒绝会自动回退到 PCM 解码"
+			} else if s.MPVAudioSpdif {
+				spdifDesc = "当前输出设备不支持压缩直通，已自动使用 PCM 解码（内置扬声器无需也无法做 bitstream 直通）"
+			}
+			row("hifi-mpv-spdif", "杜比 E-AC-3 直通（仅 HDMI 功放）", spdifDesc, func() {
 				if ui.Switch(c.Key("mpv-spdif"), &s.MPVAudioSpdif).Label("杜比 E-AC-3 直通").Changed() {
 					a.changed()
 					a.syncMPVSettings()

@@ -1007,6 +1007,11 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 					// jyeffect is already a spatialised stereo master;
 					// applying crossfeed/HRTF again would colour it twice.
 					engine.SetSpatialOptions(p.mpvCfg.SpatialMode, p.mpvCfg.HrtfProfile, spatialProcessingFor(info.Level))
+					// E-AC-3 must be decoded to PCM on ordinary CoreAudio
+					// outputs; hog mode can fail before the decoder gets a
+					// usable compressed substream. Keep exclusive mode for
+					// PCM tracks, but not for the Dolby/E-AC-3 stream itself.
+					engine.SetExclusive(p.mpvCfg.Exclusive && info.Level != "dolby")
 					if err := engine.Play(playURL, nil, p.pending); err == nil {
 						p.fade.attach(mpvVolumeOutput{p: p, e: p.mpvOut}, fadeLevel)
 						p.applyGain()

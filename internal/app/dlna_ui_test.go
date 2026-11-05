@@ -153,3 +153,16 @@ func TestAudioDeviceEnumerationAndSync(t *testing.T) {
 		t.Errorf("got AudioDevice %q, want 'auto'", cfg.AudioDevice)
 	}
 }
+
+// Tests that E-AC-3 passthrough is not forced on the auto/default output.
+func TestAudioSpdifDisabledForAutoDevice(t *testing.T) {
+	a := newTestApp()
+	a.settings.UseMPV = true
+	a.settings.MPVAudioSpdif = true
+	a.settings.MPVAudioDevice = "auto"
+	a.syncMPVSettings()
+
+	if cfg := a.pl.MPVConfig(); cfg.AudioSpdif != "" {
+		t.Fatalf("got AudioSpdif %q for auto device, want empty PCM-decoding path", cfg.AudioSpdif)
+	}
+}

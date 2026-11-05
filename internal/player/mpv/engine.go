@@ -98,6 +98,14 @@ type Engine struct {
 	eqGains        [10]float64
 	spatialEnabled bool
 
+	// lastSource/lastStart/lastHeaders remember the current load so a
+	// failed compressed-passthrough attempt can be retried through MPV's
+	// normal decoder without asking the caller to re-open the track.
+	lastSource     string
+	lastStart      time.Duration
+	lastHeaders    map[string]string
+	spdifRetryUsed bool
+
 	eventDone chan struct{}
 }
 
@@ -179,6 +187,10 @@ func (e *Engine) Play(sourceURL string, headers map[string]string, startPos time
 		}
 		e.inst.SetProperty("http-header-fields", strings.Join(hList, ", "))
 	}
+	e.lastSource = sourceURL
+	e.lastStart = startPos
+	e.lastHeaders = cloneHeaders(headers)
+	e.spdifRetryUsed = false
 
 	// Load file
 	code := e.inst.Command([]string{"loadfile", sourceURL, "replace"})
@@ -390,6 +402,49 @@ func (e *Engine) runEvents() {
 		case EventEndFile:
 			if endReason == EndFileReasonError {
 				e.mu.Lock()
+				// A device can reject compressed passthrough or exclusive
+				// CoreAudio after loadfile has already returned success.
+				// Retry once through MPV's normal PCM decoder (and without
+				// hog mode) instead of leaving the UI in a fake "playing"
+				// state. This is especially important for E-AC-3 on built-in
+				// speakers, where exclusive CoreAudio can fail before the
+				// E-AC-3 core is decoded.
+				inst := e.inst
+				retry := (e.cfg.AudioSpdif != "" || e.cfg.Exclusive) && !e.spdifRetryUsed && e.lastSource != "" && inst != nil && !e.closed
+				var source string
+				var start time.Duration
+				var headers map[string]string
+				if retry {
+					e.spdifRetryUsed = true
+					e.cfg.AudioSpdif = ""
+					inst.SetProperty("audio-spdif", "")
+					if e.cfg.Exclusive {
+						e.cfg.Exclusive = false
+						inst.SetProperty("audio-exclusive", "no")
+					}
+					source, start, headers = e.lastSource, e.lastStart, cloneHeaders(e.lastHeaders)
+					if len(headers) > 0 {
+						var hList []string
+						for k, v := range headers {
+							hList = append(hList, fmt.Sprintf("%s: %s", k, v))
+						}
+						inst.SetProperty("http-header-fields", strings.Join(hList, ", "))
+					}
+				}
+				e.mu.Unlock()
+				if retry {
+					fmt.Printf("[mpv] audio output failed; retrying with PCM decode\n")
+					if code := inst.Command([]string{"loadfile", source, "replace"}); code >= 0 {
+						if start > 0 {
+							inst.Command([]string{"seek", fmt.Sprintf("%.3f", start.Seconds()), "absolute"})
+						}
+						e.mu.Lock()
+						e.playing = true
+						e.mu.Unlock()
+						continue
+					}
+				}
+				e.mu.Lock()
 				e.playing = false
 				onError := e.onError
 				e.mu.Unlock()
@@ -531,6 +586,24 @@ func (e *Engine) SetAudioOptions(channels, spdif string) {
 	}
 }
 
+// SetExclusive enables or disables CoreAudio hog mode for the next load.
+// Dolby/E-AC-3 needs to be decoded to PCM on normal CoreAudio outputs; hog
+// mode can fail before the decoder gets a usable substream. Callers therefore
+// disable it for E-AC-3 while keeping the user's preference for PCM tracks.
+func (e *Engine) SetExclusive(enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cfg.Exclusive = enabled
+	if e.inst == nil {
+		return
+	}
+	if enabled {
+		e.inst.SetProperty("audio-exclusive", "yes")
+	} else {
+		e.inst.SetProperty("audio-exclusive", "no")
+	}
+}
+
 // Close terminates the engine.
 // GetProperty returns the string value of an MPV property.
 func (e *Engine) GetProperty(prop string) string {
@@ -563,4 +636,15 @@ func (e *Engine) Close() {
 	if inst != nil {
 		inst.Close()
 	}
+}
+
+func cloneHeaders(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
