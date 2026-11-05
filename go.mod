@@ -10,7 +10,7 @@ require (
 	github.com/hajimehoshi/go-mp3 v0.3.4
 	github.com/mewkiz/flac v1.0.14
 	github.com/supersonic-app/go-subsonic v0.0.0-20260807144657-acbe3dde04b7
-	github.com/supersonic-app/go-upnpcast v0.1.0
+	github.com/supersonic-app/go-upnpcast v0.1.1-0.20260517163705-d76cd97c192f
 	golang.org/x/image v0.46.0
 	golang.org/x/net v0.59.0
 	golang.org/x/text v0.43.0

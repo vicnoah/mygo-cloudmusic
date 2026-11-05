@@ -87,3 +87,52 @@ func TestParseDuration(t *testing.T) {
 		}
 	}
 }
+
+// Tests that an active device is never dropped from the device list when a scan cycle runs.
+func TestActiveDeviceNeverDisappearsOnRefresh(t *testing.T) {
+	ctrl, err := NewController(nil)
+	if err != nil {
+		t.Fatalf("NewController: %v", err)
+	}
+	defer ctrl.Close()
+
+	mockDev := &Device{
+		ID:           "http://192.168.1.50:1400/xml/desc.xml",
+		FriendlyName: "Living Room Speaker",
+		ModelName:    "HiFi-DLNA",
+		URL:          "http://192.168.1.50:1400/xml/desc.xml",
+	}
+
+	ctrl.mu.Lock()
+	ctrl.knownDevices[mockDev.ID] = mockDev
+	ctrl.rebuildDeviceListLocked()
+	ctrl.mu.Unlock()
+
+	if err := ctrl.SelectDevice(mockDev.ID); err != nil {
+		t.Fatalf("SelectDevice: %v", err)
+	}
+
+	if ctrl.ActiveDevice() == nil {
+		t.Fatal("expected active device to be set")
+	}
+
+	// Simulate rebuild without new SSDP responses
+	ctrl.mu.Lock()
+	ctrl.rebuildDeviceListLocked()
+	ctrl.mu.Unlock()
+
+	devs := ctrl.Devices()
+	found := false
+	for _, d := range devs {
+		if d.ID == mockDev.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected active device to still be present in Devices() list")
+	}
+	if ctrl.ActiveDevice() == nil || ctrl.ActiveDevice().ID != mockDev.ID {
+		t.Error("expected active device to remain selected")
+	}
+}

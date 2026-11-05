@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/egoist/mygo/ui"
+	"netease-music-mygo/internal/player/dlna"
 )
 
 func (a *app) castButton(c *ui.Context, pal palette) {
@@ -75,6 +76,7 @@ func (a *app) castButton(c *ui.Context, pal palette) {
 		if localRow.Clicked() {
 			pl.SwitchOutput("")
 			a.castOpen = false
+			a.toast = "已切换至本机播放"
 			a.redraw()
 		}
 
@@ -82,9 +84,23 @@ func (a *app) castButton(c *ui.Context, pal palette) {
 		devices := ctrl.Devices()
 		active := ctrl.ActiveDevice()
 
+		// Always retain the currently active device in the view so background scans never cause it to disappear
+		if active != nil {
+			found := false
+			for _, d := range devices {
+				if d.ID == active.ID || d.FriendlyName == active.FriendlyName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				devices = append([]*dlna.Device{active}, devices...)
+			}
+		}
+
 		for _, d := range devices {
 			dev := d
-			isActive := active != nil && active.ID == dev.ID
+			isActive := active != nil && (active.ID == dev.ID || active.FriendlyName == dev.FriendlyName)
 			dRow := ui.ButtonBase(c.Key("dev-" + dev.ID)).Padding(6, 8).Radius(6).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(1).MinWidth(0).Children(func() {
 					ui.Icon(c, iconCast).Size(14, 14).TextColor(pal.muted)
@@ -97,6 +113,7 @@ func (a *app) castButton(c *ui.Context, pal palette) {
 			if dRow.Clicked() {
 				pl.SwitchOutput(dev.ID)
 				a.castOpen = false
+				a.toast = "已连接投送设备: " + dev.FriendlyName
 				a.redraw()
 			}
 		}

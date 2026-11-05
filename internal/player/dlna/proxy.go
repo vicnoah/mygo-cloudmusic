@@ -88,20 +88,31 @@ func NewProxy() (*Proxy, error) {
 
 // detectLANIP discovers the local network IP that can reach local devices.
 func detectLANIP() string {
-	// Connect via UDP to an external/internal target to determine default route IP.
-	conn, err := net.Dial("udp", "192.168.1.1:80")
-	if err == nil {
-		defer conn.Close()
-		localAddr := conn.LocalAddr().(*net.UDPAddr)
-		if !localAddr.IP.IsLoopback() && localAddr.IP.To4() != nil {
-			return localAddr.IP.String()
+	// 1. Try public DNS endpoints to query the OS routing table for the primary physical gateway.
+	for _, target := range []string{"223.5.5.5:80", "119.29.29.29:80", "8.8.8.8:80"} {
+		conn, err := net.DialTimeout("udp", target, 400*time.Millisecond)
+		if err == nil {
+			localAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+			conn.Close()
+			if ok && !localAddr.IP.IsLoopback() && localAddr.IP.To4() != nil {
+				return localAddr.IP.String()
+			}
 		}
 	}
-	// Fallback to searching network interfaces.
+
+	// 2. Fallback to searching physical network interfaces (ignoring WSL / Hyper-V / VMware virtual adapters).
 	ifaces, err := net.Interfaces()
 	if err == nil {
 		for _, iface := range ifaces {
 			if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+				continue
+			}
+			name := strings.ToLower(iface.Name)
+			if strings.Contains(name, "vethernet") || strings.Contains(name, "wsl") ||
+				strings.Contains(name, "vmware") || strings.Contains(name, "virtualbox") ||
+				strings.Contains(name, "hyper-v") || strings.Contains(name, "docker") ||
+				strings.Contains(name, "tailscale") || strings.Contains(name, "tun") ||
+				strings.Contains(name, "tap") || strings.Contains(name, "wg") {
 				continue
 			}
 			addrs, err := iface.Addrs()
@@ -139,9 +150,14 @@ func (p *Proxy) LocalURL(trackID string) string {
 }
 
 // LANURLFor returns the LAN streaming URL using the specific interface IP reachable by targetURL.
-func (p *Proxy) LANURLFor(trackID, targetURL string) string {
+// Optional ext appends a file extension (e.g. "mp3" or "flac") which many DLNA devices require.
+func (p *Proxy) LANURLFor(trackID, targetURL string, ext ...string) string {
 	ip := p.detectLANIPFor(targetURL)
-	return fmt.Sprintf("http://%s:%d/stream/%s", ip, p.port, trackID)
+	fileExt := ""
+	if len(ext) > 0 && ext[0] != "" {
+		fileExt = "." + strings.TrimPrefix(ext[0], ".")
+	}
+	return fmt.Sprintf("http://%s:%d/stream/%s%s", ip, p.port, trackID, fileExt)
 }
 
 func (p *Proxy) detectLANIPFor(targetURL string) string {
@@ -153,7 +169,7 @@ func (p *Proxy) detectLANIPFor(targetURL string) string {
 		conn, err := net.DialTimeout("udp", host, 500*time.Millisecond)
 		if err == nil {
 			defer conn.Close()
-			if localAddr, ok := conn.LocalAddr().(*net.UDPAddr); ok && !localAddr.IP.IsLoopback() {
+			if localAddr, ok := conn.LocalAddr().(*net.UDPAddr); ok && !localAddr.IP.IsLoopback() && localAddr.IP.To4() != nil {
 				return localAddr.IP.String()
 			}
 		}
@@ -178,6 +194,18 @@ func (p *Proxy) Unregister(trackID string) {
 	}
 }
 
+func buildContentFeatures(mimeType string) string {
+	var cf strings.Builder
+	switch mimeType {
+	case "audio/mpeg":
+		cf.WriteString("DLNA.ORG_PN=MP3;")
+	}
+	cf.WriteString("DLNA.ORG_OP=01;")
+	cf.WriteString("DLNA.ORG_CI=0;")
+	cf.WriteString("DLNA.ORG_FLAGS=01700000000000000000000000000000")
+	return cf.String()
+}
+
 func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 	rawID := r.URL.Path[len("/stream/"):]
 	p.mu.RLock()
@@ -197,8 +225,19 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Always emit DLNA compliance headers on all responses (GET, HEAD, 200, 206)
+	w.Header().Set("Accept-Ranges", "bytes")
+	if cf := buildContentFeatures(src.ContentType); cf != "" {
+		w.Header().Set("contentFeatures.dlna.org", cf)
+	}
+	w.Header().Set("transferMode.dlna.org", "Streaming")
+	w.Header().Set("Connection", "close")
+
 	// 1. If we have a local cached file, serve it directly with range support.
 	if src.LocalFile != "" {
+		if src.ContentType != "" {
+			w.Header().Set("Content-Type", src.ContentType)
+		}
 		http.ServeFile(w, r, src.LocalFile)
 		return
 	}
@@ -209,9 +248,66 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	client := p.client
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	// Handle HEAD requests specifically to prevent 403 / 405 rejections from CDNs
+	if r.Method == http.MethodHead {
+		headReq, _ := http.NewRequestWithContext(r.Context(), http.MethodHead, src.RemoteURL, nil)
+		for k, vv := range src.Headers {
+			for _, v := range vv {
+				headReq.Header.Add(k, v)
+			}
+		}
+		headResp, err := client.Do(headReq)
+		if err == nil && headResp.StatusCode >= 200 && headResp.StatusCode < 300 {
+			defer headResp.Body.Close()
+			for k, vv := range headResp.Header {
+				for _, v := range vv {
+					if !strings.EqualFold(k, "Content-Type") && !strings.EqualFold(k, "Connection") {
+						w.Header().Add(k, v)
+					}
+				}
+			}
+			if src.ContentType != "" {
+				w.Header().Set("Content-Type", src.ContentType)
+			}
+			w.WriteHeader(headResp.StatusCode)
+			return
+		}
+		if headResp != nil {
+			_ = headResp.Body.Close()
+		}
+
+		// Fallback probe for CDNs rejecting HEAD: send Range: 0-0 GET to learn content length
+		probeReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, src.RemoteURL, nil)
+		for k, vv := range src.Headers {
+			for _, v := range vv {
+				probeReq.Header.Add(k, v)
+			}
+		}
+		probeReq.Header.Set("Range", "bytes=0-0")
+		probeResp, err := client.Do(probeReq)
+		if err == nil {
+			defer probeResp.Body.Close()
+			if cr := probeResp.Header.Get("Content-Range"); cr != "" {
+				if _, total, ok := strings.Cut(cr, "/"); ok && total != "*" {
+					w.Header().Set("Content-Length", total)
+				}
+			} else if cl := probeResp.Header.Get("Content-Length"); cl != "" {
+				w.Header().Set("Content-Length", cl)
+			}
+			if src.ContentType != "" {
+				w.Header().Set("Content-Type", src.ContentType)
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}
+
 	// Cancel and close any previous in-flight upstream connection for this track.
-	// Media servers like Feiniu NAS lock streams per track and dead-lock if a range-seek
-	// occurs while the previous connection is still actively receiving bytes.
 	p.mu.Lock()
 	if oldCloser, exists := p.activeBodies[key]; exists && oldCloser != nil {
 		_ = oldCloser.Close()
@@ -253,10 +349,6 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 		req.Header.Set("Range", rng)
 	}
 
-	client := p.client
-	if client == nil {
-		client = http.DefaultClient
-	}
 	resp, err := client.Do(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -271,17 +363,14 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 	for k, vv := range resp.Header {
 		for _, v := range vv {
 			if strings.EqualFold(k, "Content-Type") && src.ContentType != "" {
-				// Don't forward bogus Content-Type like text/html
 				continue
 			}
 			if strings.EqualFold(k, "Connection") {
-				// Prevent HTTP keep-alive deadlocks during range seeks
 				continue
 			}
 			w.Header().Add(k, v)
 		}
 	}
-	w.Header().Set("Connection", "close")
 	if src.ContentType != "" {
 		w.Header().Set("Content-Type", src.ContentType)
 	}
@@ -335,7 +424,7 @@ func (p *Proxy) SetLANIP(ip string) {
 
 // FormatToMIME converts common audio format extensions to DLNA-friendly MIME types.
 func FormatToMIME(format string) string {
-	switch format {
+	switch strings.ToLower(strings.TrimPrefix(format, ".")) {
 	case "flac":
 		return "audio/flac"
 	case "mp3":

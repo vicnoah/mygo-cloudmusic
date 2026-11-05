@@ -89,7 +89,7 @@ func (a *app) scanDLNADevices() {
 	a.dlnaScanning = true
 	a.redraw()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		_, _ = ctrl.RefreshDevices(ctx)
 		a.post(func() {

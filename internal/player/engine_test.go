@@ -215,4 +215,48 @@ func TestMPVProgressAndReady(t *testing.T) {
 	if seekPos < 14*time.Second || seekPos > 18*time.Second {
 		t.Errorf("expected seek position near 15s, got %v", seekPos)
 	}
+
+	// Test Decoupled Volume Mapping in MPV
+	p.SetVolume(0.8)
+	if v := p.mpvOut.Volume(); v != 0.8 {
+		t.Errorf("expected MPV volume 0.8, got %v", v)
+	}
+	p.SetVolume(0.5)
+	if v := p.mpvOut.Volume(); v != 0.5 {
+		t.Errorf("expected MPV volume 0.5, got %v", v)
+	}
+	p.SetVolume(1.0)
+	if v := p.mpvOut.Volume(); v != 1.0 {
+		t.Errorf("expected MPV volume 1.0, got %v", v)
+	}
+}
+
+type testFadeOutput struct {
+	vol   float64
+	level float64
+}
+
+func (t *testFadeOutput) setVolume(v float64) {
+	t.vol = v
+}
+
+func (t *testFadeOutput) setFadeLevel(l float64) {
+	t.level = l
+}
+
+// Tests that fader routes through fadeLevelOutput when supported.
+func TestFaderFadeLevelOutput(t *testing.T) {
+	f := &fader{}
+	out := &testFadeOutput{}
+	f.attach(out, 1.0)
+	f.setGain(0.64)
+
+	if out.level != 1.0 {
+		t.Errorf("got level %v, want 1.0", out.level)
+	}
+	// Normal volumeOutput would have set out.vol = 0.64 * 1.0 = 0.64,
+	// but fadeLevelOutput must receive the unscaled fade level 1.0.
+	if out.vol != 0 {
+		t.Errorf("expected setVolume not to be called, got %v", out.vol)
+	}
 }

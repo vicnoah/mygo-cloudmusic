@@ -20,12 +20,19 @@ import (
 )
 
 type mpvVolumeOutput struct {
+	p *Player
 	e *mpv.Engine
 }
 
 func (m mpvVolumeOutput) setVolume(v float64) {
 	if m.e != nil {
-		m.e.SetVolume(v)
+		m.e.SetVolume(max(0, min(1, v)))
+	}
+}
+
+func (m mpvVolumeOutput) setFadeLevel(level float64) {
+	if m.e != nil && m.p != nil {
+		m.e.SetVolume(max(0, min(1, m.p.volume*level)))
 	}
 }
 
@@ -665,6 +672,13 @@ func (p *Player) applyGain() {
 		g *= p.gain
 	}
 	p.fade.setGain(g)
+	if p.mpvOut != nil {
+		db := 0.0
+		if p.Normalize != nil && p.Normalize() && p.info != nil && p.info.Gain != 0 {
+			db = p.info.Gain + normPreamp
+		}
+		p.mpvOut.SetReplayGainPreamp(db)
+	}
 }
 
 // normPreamp lifts normalized tracks, which NetEase brings to the quiet
@@ -848,7 +862,25 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 					localFile = p.Cache.FilePath(t.ID, level)
 				}
 				trackID := fmt.Sprintf("%d", t.ID)
-				_ = p.dlnaCtrl.PlayTrack(context.Background(), trackID, t.Name, info.URL, localFile, info.Type, headers, t.Length(), p.pending)
+				meta := dlna.TrackMeta{
+					ID:        trackID,
+					Title:     t.Name,
+					Artist:    t.ArtistNames(),
+					Album:     t.Album.Name,
+					CoverURL:  netease.Sized(t.Album.PicURL, 600),
+					StreamURL: info.URL,
+					LocalFile: localFile,
+					Format:    info.Type,
+					Duration:  t.Length(),
+					Size:      info.Size,
+					Headers:   headers,
+				}
+				if err := p.dlnaCtrl.PlayTrack(context.Background(), meta, p.pending); err != nil {
+					p.err = fmt.Sprintf("无线投送失败: %v", err)
+					p.playing = false
+					p.sync()
+					return
+				}
 				p.pending = 0
 				p.markStarted()
 				p.sync()
@@ -894,7 +926,7 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 					if playURL != "" {
 						if err := engine.Play(playURL, nil, p.pending); err == nil {
 							p.mpvOut = engine
-							p.fade.attach(mpvVolumeOutput{p.mpvOut}, fadeLevel)
+							p.fade.attach(mpvVolumeOutput{p: p, e: p.mpvOut}, fadeLevel)
 							p.applyGain()
 							p.mpvOut.OnEnd(func() {
 								p.post(func() {

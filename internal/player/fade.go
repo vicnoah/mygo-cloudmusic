@@ -18,6 +18,10 @@ type volumeOutput interface {
 	setVolume(v float64)
 }
 
+type fadeLevelOutput interface {
+	setFadeLevel(level float64)
+}
+
 type audioPlayerOutput struct {
 	*audio.Player
 }
@@ -55,7 +59,12 @@ func (f *fader) level(now time.Time) float64 {
 
 func (f *fader) apply(now time.Time) {
 	if f.out != nil {
-		f.out.setVolume(f.gain * f.level(now))
+		lvl := f.level(now)
+		if flo, ok := f.out.(fadeLevelOutput); ok {
+			flo.setFadeLevel(lvl)
+		} else {
+			f.out.setVolume(f.gain * lvl)
+		}
 	}
 }
 
