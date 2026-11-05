@@ -179,6 +179,7 @@ func TestFormatToMIME(t *testing.T) {
 		{"flac", "audio/flac"},
 		{"mp3", "audio/mpeg"},
 		{"m4a", "audio/mp4"},
+		{"mp4", "audio/mp4"},
 		{"aac", "audio/mp4"},
 		{"wav", "audio/wav"},
 		{"dsd", "audio/x-dsd"},

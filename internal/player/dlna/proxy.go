@@ -495,7 +495,7 @@ func FormatToMIME(format string) string {
 		return "audio/flac"
 	case "mp3":
 		return "audio/mpeg"
-	case "m4a", "aac":
+	case "m4a", "mp4", "aac", "av3a":
 		return "audio/mp4"
 	case "wav":
 		return "audio/wav"

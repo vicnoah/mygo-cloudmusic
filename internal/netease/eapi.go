@@ -40,6 +40,16 @@ var eapiClient = map[string]string{
 	"channel": "netease",
 }
 
+// eapiHarmonyClient is the HarmonyOS-shaped client profile. NetEase serves
+// Audio Vivid (level "vivid") only to a recent HarmonyOS client; asking as
+// the desktop client gets -110 or -460 for that level.
+var eapiHarmonyClient = map[string]string{
+	"os":      "harmony",
+	"appver":  "9.5.90",
+	"osver":   "HarmonyOS 4.2.0",
+	"channel": "netease",
+}
+
 var (
 	deviceOnce sync.Once
 	deviceID   string
@@ -78,16 +88,23 @@ func device() string {
 // data, and decodes the JSON it answers into out. The cookies it sets, the
 // session's among them, go in the jar.
 func eapiPost(path string, data map[string]any, out any) error {
+	return eapiPostAt(eapiDomain, eapiClient, path, data, out)
+}
+
+// eapiPostAt is eapiPost to another host and client profile. The song URL
+// endpoint lives on interface3, and Audio Vivid needs a HarmonyOS shaped
+// request; everything else uses eapiPost's desktop profile.
+func eapiPostAt(host string, client map[string]string, path string, data map[string]any, out any) error {
 	header := map[string]string{
-		"osver":       eapiClient["osver"],
+		"osver":       client["osver"],
 		"deviceId":    device(),
-		"os":          eapiClient["os"],
-		"appver":      eapiClient["appver"],
+		"os":          client["os"],
+		"appver":      client["appver"],
 		"versioncode": "140",
 		"mobilename":  "",
 		"buildver":    fmt.Sprint(time.Now().Unix()),
 		"resolution":  "1920x1080",
-		"channel":     eapiClient["channel"],
+		"channel":     client["channel"],
 		"requestId":   fmt.Sprintf("%d_%04d", time.Now().UnixMilli(), time.Now().Nanosecond()%1000),
 		"__csrf":      "",
 	}
@@ -105,7 +122,7 @@ func eapiPost(path string, data map[string]any, out any) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest("POST", eapiDomain+"/eapi/"+strings.TrimPrefix(path, "/api/"),
+	req, err := http.NewRequest("POST", strings.TrimRight(host, "/")+"/eapi/"+strings.TrimPrefix(path, "/api/"),
 		strings.NewReader(url.Values{"params": {params}}.Encode()))
 	if err != nil {
 		return err

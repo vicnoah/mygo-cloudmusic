@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand/v2"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,6 +18,7 @@ import (
 
 	"netease-music-mygo/internal/lyrics"
 	"netease-music-mygo/internal/netease"
+	"netease-music-mygo/internal/player/av3a"
 	"netease-music-mygo/internal/player/dlna"
 	"netease-music-mygo/internal/player/mpv"
 )
@@ -93,6 +97,9 @@ type Player struct {
 	mpvCfg   mpv.Config
 	mpvOut   *mpv.Engine
 	dlnaCtrl *dlna.Controller
+	// vividDirs are the temporary MP4/WAV directories of Audio Vivid
+	// tracks that played, removed when the next track loads.
+	vividDirs []string
 
 	// pending holds a seek asked for while the track loads.
 	pending time.Duration
@@ -525,6 +532,7 @@ func (p *Player) SetMPVConfig(cfg mpv.Config) {
 	if p.mpvOut != nil {
 		p.mpvOut.SetEqualizer(cfg.EqualizerPreamp, cfg.EqualizerGains, cfg.EqualizerEnabled)
 		p.mpvOut.SetAudioDevice(cfg.AudioDevice)
+		p.mpvOut.SetAudioOptions(cfg.AudioChannels, cfg.AudioSpdif)
 	}
 }
 
@@ -787,9 +795,18 @@ func (p *Player) stop() {
 	if mpvOut := p.mpvOut; mpvOut != nil {
 		mpvOut.Stop()
 	}
+	p.clearVividDirs()
 	p.out, p.stream, p.info = nil, nil, nil
 	p.seeking = false
 	p.fade.attach(nil, 1)
+}
+
+// clearVividDirs drops the temporary files made to decode Audio Vivid.
+func (p *Player) clearVividDirs() {
+	for _, dir := range p.vividDirs {
+		_ = os.RemoveAll(dir)
+	}
+	p.vividDirs = nil
 }
 
 // load plays the track at order[at], skipping those that cannot play.
@@ -937,10 +954,17 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 					}
 					p.mpvOut = engine
 				}
-				playURL := info.URL
-				if p.Cache != nil {
-					if f := p.Cache.FilePath(t.ID, level); f != "" {
-						playURL = f
+				playURL := info.PlayPath
+				if playURL == "" {
+					playURL = info.URL
+					cacheLevel := level
+					if info.Level != "" {
+						cacheLevel = info.Level
+					}
+					if p.Cache != nil {
+						if f := p.Cache.FilePath(t.ID, cacheLevel); f != "" {
+							playURL = f
+						}
 					}
 				}
 				// If streaming over network and we have a proxy, route via local proxy
@@ -1061,14 +1085,27 @@ func (p *Player) prefetchNextMPV(at, gen int) {
 		if p.Quality != nil {
 			level = p.Quality()
 		}
-		info, _, err := p.open(nextTrack, level)
-		if err != nil || info == nil || info.URL == "" {
+		// Audio Vivid decoding is slow and needs a whole file: do not
+		// decode the next song in the background, let its own load show the
+		// progress instead.
+		if p.effectiveLevel(level) == "vivid" {
 			return
 		}
-		playURL := info.URL
-		if p.Cache != nil {
-			if f := p.Cache.FilePath(nextTrack.ID, level); f != "" {
-				playURL = f
+		info, _, err := p.open(nextTrack, level)
+		if err != nil || info == nil || (info.URL == "" && info.PlayPath == "") {
+			return
+		}
+		playURL := info.PlayPath
+		if playURL == "" {
+			playURL = info.URL
+			cacheLevel := level
+			if info.Level != "" {
+				cacheLevel = info.Level
+			}
+			if p.Cache != nil {
+				if f := p.Cache.FilePath(nextTrack.ID, cacheLevel); f != "" {
+					playURL = f
+				}
 			}
 		}
 		if (strings.HasPrefix(playURL, "http://") || strings.HasPrefix(playURL, "https://")) && p.dlnaCtrl != nil && p.dlnaCtrl.Proxy() != nil {
@@ -1100,11 +1137,34 @@ func (p *Player) prefetchNextMPV(at, gen int) {
 	}()
 }
 
+// effectiveLevel lowers a level the current output cannot play. Audio Vivid
+// needs its helper and MPV; surround FLAC needs MPV; casting gets the
+// stereo spatial level.
+func (p *Player) effectiveLevel(level string) string {
+	if level == "vivid" && !av3a.Ready() {
+		level = "sky"
+	}
+	if p.IsCasting() && netease.Spatial(level) {
+		return "jyeffect"
+	}
+	if !p.UsingMPV() && netease.Spatial(level) {
+		switch level {
+		case "vivid", "dolby", "sky":
+			return "jyeffect"
+		}
+	}
+	return level
+}
+
 // open opens track t's audio at level: kept in the cache, or else
 // streamed into it, and kept once it has all come in.
 func (p *Player) open(t netease.Track, level string) (*netease.Stream, stream, error) {
+	level = p.effectiveLevel(level)
 	if info, decoded, err, handled := p.resolveAudio(&t, level); handled {
 		return info, decoded, err
+	}
+	if level == "vivid" && p.UsingMPV() {
+		return p.openVivid(t)
 	}
 	dl, info, ok := p.Cache.lookup(t.ID, level)
 	if !ok {
@@ -1127,6 +1187,83 @@ func (p *Player) open(t netease.Track, level string) (*netease.Stream, stream, e
 		return nil, nil, err
 	}
 	return info, s, nil
+}
+
+// openVivid fetches the AV3A MP4, decodes it to a WAV with the helper, and
+// hands that WAV to MPV. If the server served a lower level, or the helper
+// cannot decode, it falls back to the surround FLAC stream instead.
+func (p *Player) openVivid(t netease.Track) (*netease.Stream, stream, error) {
+	info, err := p.resolveStream(&t, "vivid")
+	if err != nil {
+		return nil, nil, err
+	}
+	if info.Level != "vivid" {
+		return info, nil, nil
+	}
+	if err := p.prepareVivid(t, info); err != nil {
+		fallback, ferr := p.resolveStream(&t, "sky")
+		if ferr == nil {
+			return fallback, nil, nil
+		}
+		return nil, nil, err
+	}
+	return info, nil, nil
+}
+
+// prepareVivid downloads the MP4 to a temporary directory and decodes it
+// into a WAV MPV can play. The directory is removed when the next track
+// loads.
+func (p *Player) prepareVivid(t netease.Track, info *netease.Stream) error {
+	dir, err := os.MkdirTemp("", fmt.Sprintf("mygo-vivid-%d-", t.ID))
+	if err != nil {
+		return err
+	}
+	p.vividDirs = append(p.vividDirs, dir)
+	ext := info.Type
+	if ext != "mp4" && ext != "m4a" {
+		ext = "mp4"
+	}
+	src := filepath.Join(dir, "source."+ext)
+	if err := downloadStream(info, src); err != nil {
+		return err
+	}
+	out := filepath.Join(dir, "decoded.wav")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if err := av3a.Decode(ctx, src, out); err != nil {
+		return err
+	}
+	info.PlayPath = out
+	return nil
+}
+
+// downloadStream fetches an authenticated stream URL into path.
+func downloadStream(info *netease.Stream, path string) error {
+	req, err := http.NewRequest(http.MethodGet, info.URL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", netease.UserAgent)
+	if info.Header != nil {
+		for k, v := range info.Header() {
+			req.Header[k] = v
+		}
+	}
+	res, err := (&http.Client{Timeout: 10 * time.Minute}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("vivid: download: %s", res.Status)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, res.Body)
+	return err
 }
 
 // Session is where playback was left, to pick up again.

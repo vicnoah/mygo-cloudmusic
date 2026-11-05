@@ -348,14 +348,15 @@ func (a *app) radioChip(c *ui.Context, name string) {
 	}
 }
 
-// qualityBadge marks a lossless stream, as it plays.
+// qualityBadge marks the high quality stream that plays: lossless, Hi-Res,
+// spatial stereo, surround, master or an immersive format.
 func qualityBadge(c *ui.Context, st *netease.Stream) {
-	if st == nil || !netease.Lossless(st.Level) {
+	if st == nil {
 		return
 	}
-	label := "无损"
-	if st.Level == "hires" {
-		label = "Hi-Res"
+	label := netease.ShortLabel(st.Level)
+	if label == "" {
+		return
 	}
 	ui.Text(c, label).FontSize(9.5).FontWeight(800).LetterSpacing(0.6).TextColor(ui.Hex("#f5d58a")).
 		Padding(1, 6).Radius(4).Border(1, ui.Hex("#f5d58a").Alpha(0.55))

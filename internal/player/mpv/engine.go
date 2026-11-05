@@ -54,6 +54,14 @@ type Config struct {
 	ReplayGain string
 	// AudioDevice specifies output audio device, or "" for default.
 	AudioDevice string
+	// AudioChannels controls the channel layout MPV sends to the device.
+	// "auto-safe" is MPV's default; an explicit speaker whitelist such as
+	// "fl-fr-fc-lfe-bl-br-sl-sr-tfl-tfr-tbl-tbr,5.1(side),stereo" is for
+	// multichannel HDMI/USB outputs.
+	AudioChannels string
+	// AudioSpdif passes these codecs through undecoded, such as "eac3" to
+	// an HDMI receiver for Dolby Atmos.
+	AudioSpdif string
 	// Gapless enables gapless playback for consecutive tracks.
 	Gapless bool
 	// Equalizer settings
@@ -112,6 +120,12 @@ func NewEngine(cfg Config) (*Engine, error) {
 	}
 	if cfg.AudioDevice != "" {
 		inst.SetProperty("audio-device", cfg.AudioDevice)
+	}
+	if cfg.AudioChannels != "" {
+		inst.SetProperty("audio-channels", cfg.AudioChannels)
+	}
+	if cfg.AudioSpdif != "" {
+		inst.SetProperty("audio-spdif", cfg.AudioSpdif)
 	}
 
 	e := &Engine{
@@ -466,6 +480,25 @@ func (e *Engine) SetAudioDevice(dev string) {
 			dev = "auto"
 		}
 		e.inst.SetProperty("audio-device", dev)
+	}
+}
+
+// SetAudioOptions updates the channel layout and SP-DIF passthrough while
+// the engine is playing. Empty strings leave MPV's defaults.
+func (e *Engine) SetAudioOptions(channels, spdif string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cfg.AudioChannels, e.cfg.AudioSpdif = channels, spdif
+	if e.inst == nil {
+		return
+	}
+	if channels != "" {
+		e.inst.SetProperty("audio-channels", channels)
+	}
+	if spdif != "" {
+		e.inst.SetProperty("audio-spdif", spdif)
+	} else {
+		e.inst.SetProperty("audio-spdif", "")
 	}
 }
 

@@ -397,63 +397,144 @@ type Stream struct {
 	PlatformStream
 	URL  string `json:"-"`
 	Size int64  `json:"size"` // in bytes
-	// Type is the format: mp3, or flac for the lossless levels.
+	// Type is the format: mp3, flac, mp4 or m4a.
 	Type string `json:"type"`
 	// Level is the level served, which may be below the one asked for.
 	Level string `json:"level"`
+	// BR and SR are the bit rate and sample rate the server served.
+	BR int64 `json:"br,omitempty"`
+	SR int   `json:"sr,omitempty"`
+	// ChannelLayout names the channels of a surround stream, such as
+	// "5.1(side)" or "7.1.4". It is empty for stereo.
+	ChannelLayout string `json:"channelLayout,omitempty"`
+	// ImmerseType is whatever immersive metadata NetEase sent, kept as it
+	// arrived so a newer server field does not break the read.
+	ImmerseType json.RawMessage `json:"immerseType,omitempty"`
 	// Gain is how many dB to change the track by to sound as loud as
 	// others, and Peak its loudest sample, 1 at full scale, or 0 if
 	// unknown.
 	Gain float64 `json:"gain"`
 	Peak float64 `json:"peak"`
+	// PlayPath is a local file to play in place of URL, for a stream that
+	// needed decoding before the audio engine could load it (Audio Vivid).
+	PlayPath string `json:"-"`
 }
 
-// Levels are the stream levels, from the lowest.
-var Levels = []string{"standard", "higher", "exhigh", "lossless", "hires"}
+// songURLResponse is the eapi's answer for one song URL request.
+type songURLResponse struct {
+	Code int `json:"code"`
+	Data []struct {
+		Stream
+		URL           string          `json:"url"`
+		Peak          *float64        `json:"peak"`
+		FreeTrialInfo json.RawMessage `json:"freeTrialInfo"`
+		Code          int             `json:"code"`
+	} `json:"data"`
+}
 
-// Lossless reports whether level streams FLAC.
-func Lossless(level string) bool { return level == "lossless" || level == "hires" }
+// SongURL returns where to stream a track at level, or the best lower
+// level the server will serve. It goes through the eapi, which carries the
+// session, so VIP songs play for subscribers.
+//
+// The server often answers a request for a level above the account's
+// entitlement with a playable lower level: that answer is returned as is,
+// with Stream.Level naming what was actually served. Only when no URL
+// comes back does the client try the next level in FallbackLevels.
+const maxSongURLAttempts = 4
 
-// SongURL returns where to stream a track, MP3 or FLAC, at level (one of
-// Levels) or the best below it the listener may play. It goes through
-// the eapi, which carries the session, so VIP songs play for subscribers.
 func SongURL(id int64, level string) (*Stream, error) {
-	var res struct {
-		Code int `json:"code"`
-		Data []struct {
-			Stream
-			URL           string          `json:"url"`
-			Peak          *float64        `json:"peak"`
-			FreeTrialInfo json.RawMessage `json:"freeTrialInfo"`
-		} `json:"data"`
+	var lastErr error
+	// A bad token or a blocked host can fail every level. Stop after a few
+	// so one play does not become a burst of API calls and trip risk
+	// control; the server usually answers with a usable lower level on the
+	// first request anyway.
+	for i, try := range FallbackLevels(level) {
+		if i >= maxSongURLAttempts {
+			break
+		}
+		s, err := songURLAt(id, try)
+		if err == nil && s != nil {
+			return s, nil
+		}
+		if err != nil {
+			lastErr = err
+		}
 	}
-	encode := "mp3"
-	if Lossless(level) {
-		encode = "flac"
+	if lastErr != nil {
+		return nil, lastErr
 	}
-	data := map[string]any{"ids": fmt.Sprintf("[%d]", id), "level": level, "encodeType": encode}
-	if err := eapiPost("/api/song/enhance/player/url/v1", data, &res); err != nil {
+	return nil, ErrUnavailable
+}
+
+// songURLHost returns the preferred host for level and the host to try if
+// it answers -460. The older levels keep the desktop host they have always
+// used; the newer immersive levels use interface3, which Ncrust found
+// serves the song URL endpoint most reliably.
+func songURLHost(level string) (host, other string) {
+	switch level {
+	case "sky", "jymaster", "dolby", "vivid":
+		return "https://interface3.music.163.com", eapiDomain
+	default:
+		return eapiDomain, "https://interface3.music.163.com"
+	}
+}
+
+// songURLAt asks for exactly one level. The host and client profile matter
+// for the higher levels: interface3 serves the song URL endpoint, and
+// Audio Vivid is answered only for a HarmonyOS shaped request.
+func songURLAt(id int64, level string) (*Stream, error) {
+	req := map[string]any{
+		"ids":        fmt.Sprintf("[%d]", id),
+		"level":      level,
+		"encodeType": EncodeType(level),
+	}
+	profile := eapiClient
+	if level == "vivid" {
+		profile = eapiHarmonyClient
+	}
+	host, other := songURLHost(level)
+	var res songURLResponse
+	err := eapiPostAt(host, profile, "/api/song/enhance/player/url/v1", req, &res)
+	if err == nil && res.Code == -460 {
+		// Some networks and accounts reject one host; try the other before
+		// giving up on this level.
+		res = songURLResponse{}
+		err = eapiPostAt(other, profile, "/api/song/enhance/player/url/v1", req, &res)
+	}
+	if err != nil {
 		return nil, err
 	}
-	if len(res.Data) == 0 || res.Data[0].URL == "" {
+	if res.Code != 200 {
+		return nil, fmt.Errorf("netease: song url: code %d", res.Code)
+	}
+	if len(res.Data) == 0 {
 		return nil, ErrUnavailable
 	}
 	d := res.Data[0]
-	// A preview of a VIP song is no song.
+	if d.Code != 0 && d.Code != 200 {
+		return nil, fmt.Errorf("netease: song url: item code %d", d.Code)
+	}
+	if d.URL == "" {
+		return nil, ErrUnavailable
+	}
+	// A preview of a VIP song is no song, as before.
 	if len(d.FreeTrialInfo) > 0 && string(d.FreeTrialInfo) != "null" {
 		return nil, ErrUnavailable
 	}
 	s := d.Stream
-	s.Type = strings.ToLower(s.Type)
-	if s.Type != "" && s.Type != "mp3" && s.Type != "flac" {
+	s.Type = strings.ToLower(strings.TrimSpace(s.Type))
+	if s.Type == "" {
+		s.Type = EncodeType(level)
+	}
+	switch s.Type {
+	case "mp3", "flac", "mp4", "m4a":
+	default:
 		return nil, fmt.Errorf("unsupported format %s", s.Type)
 	}
 	if d.Peak != nil {
 		s.Peak = *d.Peak
 	}
-	// The level names the song's file in the cache: one not of Levels is
-	// taken for the one asked for.
-	if !slices.Contains(Levels, s.Level) {
+	if s.Level == "" || !slices.Contains(Levels, s.Level) {
 		s.Level = level
 	}
 	s.URL = strings.Replace(d.URL, "http://", "https://", 1)
