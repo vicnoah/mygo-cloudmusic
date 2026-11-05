@@ -128,7 +128,7 @@ func (a *app) settingsView(c *ui.Context) {
 		}
 
 		group("播放", func() {
-			row("音质", "无损与 Hi-Res 需要黑胶 VIP，没有时播放所能播放的最高音质；下一首歌曲开始生效", func() {
+			row("音质", "无损、Hi-Res、高清臻音需黑胶 VIP；沉浸环绕声、超清母带、杜比全景声、臻音全景声需黑胶 SVIP；空间音频需要高级解码引擎；下一首歌曲开始生效", func() {
 				labels := make([]string, len(qualityLevels))
 				chosen := qualityLevels[2].label
 				for i, q := range qualityLevels {
@@ -137,7 +137,7 @@ func (a *app) settingsView(c *ui.Context) {
 						chosen = q.label
 					}
 				}
-				if ui.Select(c.Key("quality"), &chosen, labels).Label("音质").Width(150).Changed() {
+				if ui.Select(c.Key("quality"), &chosen, labels).Label("音质").Width(240).Changed() {
 					for _, q := range qualityLevels {
 						if q.label == chosen {
 							s.Quality = q.level

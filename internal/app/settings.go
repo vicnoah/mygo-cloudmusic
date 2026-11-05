@@ -97,6 +97,12 @@ type settings struct {
 	MPVGapless bool `json:"mpvGapless,omitempty"`
 	// MPVAudioDevice specifies the selected output device name ("" or "auto" for system default).
 	MPVAudioDevice string `json:"mpvAudioDevice,omitempty"`
+	// MPVAudioChannels is MPV's output channel layout: "auto-safe",
+	// "stereo", or an explicit speaker whitelist for multichannel output.
+	MPVAudioChannels string `json:"mpvAudioChannels,omitempty"`
+	// MPVAudioSpdif passes E-AC-3 through to an HDMI receiver instead of
+	// decoding its core in MPV.
+	MPVAudioSpdif bool `json:"mpvAudioSpdif,omitempty"`
 
 	// EqualizerEnabled toggles graphic EQ processing in MPV.
 	EqualizerEnabled bool `json:"equalizerEnabled,omitempty"`
@@ -111,7 +117,7 @@ type settings struct {
 }
 
 func defaultSettings() settings {
-	return settings{NotchActivity: true, Quality: "exhigh", Appearance: "system", Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, Captions: true, EqualizerPreset: "flat"}
+	return settings{NotchActivity: true, Quality: "exhigh", Appearance: "system", Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, Captions: true, EqualizerPreset: "flat", MPVAudioChannels: "auto-safe"}
 }
 
 func settingsPath() (string, error) {
@@ -207,6 +213,11 @@ var qualityLevels = []struct{ level, label string }{
 	{"exhigh", "极高（320k）"},
 	{"lossless", "无损（FLAC）"},
 	{"hires", "Hi-Res"},
+	{"jyeffect", "高清臻音（96kHz/24bit）"},
+	{"sky", "沉浸环绕声（5.1）"},
+	{"jymaster", "超清母带（192kHz/24bit）"},
+	{"dolby", "杜比全景声（E-AC-3）"},
+	{"vivid", "臻音全景声（Audio Vivid 7.1.4）"},
 }
 
 // cacheLimits are the sizes the song cache may take, in megabytes.

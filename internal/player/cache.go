@@ -42,7 +42,15 @@ func cacheKey(id int64, level string) string { return fmt.Sprintf("%d-%s", id, l
 // keepable reports whether a song of level and type ext may be kept: they
 // name its file, so only those known, which keep it in the cache's folder.
 func keepable(level, ext string) bool {
-	return slices.Contains(netease.Levels, level) && (ext == "mp3" || ext == "flac")
+	if !slices.Contains(netease.Levels, level) {
+		return false
+	}
+	switch ext {
+	case "mp3", "flac", "mp4", "m4a":
+		return true
+	default:
+		return false
+	}
 }
 
 // FilePath returns the path to the cached song file if completely downloaded, or "".
@@ -194,8 +202,9 @@ func (c *Cache) songs() []cachedSong {
 	entries, _ := os.ReadDir(c.dir)
 	var out []cachedSong
 	for _, e := range entries {
-		ext := filepath.Ext(e.Name())
-		if ext != ".mp3" && ext != ".flac" {
+		switch filepath.Ext(e.Name()) {
+		case ".mp3", ".flac", ".mp4", ".m4a":
+		default:
 			continue
 		}
 		info, err := e.Info()

@@ -14,11 +14,21 @@ func (a *app) syncMPVSettings() {
 	if a.pl == nil {
 		return
 	}
+	spdif := ""
+	if a.settings.MPVAudioSpdif {
+		spdif = "eac3"
+	}
+	channels := a.settings.MPVAudioChannels
+	if channels == "" {
+		channels = "auto-safe"
+	}
 	a.pl.SetUseMPV(a.settings.UseMPV)
 	a.pl.SetMPVConfig(mpv.Config{
 		Exclusive:        a.settings.MPVExclusive,
 		ReplayGain:       a.settings.MPVReplayGain,
 		AudioDevice:      a.settings.MPVAudioDevice,
+		AudioChannels:    channels,
+		AudioSpdif:       spdif,
 		Gapless:          a.settings.MPVGapless,
 		EqualizerEnabled: a.settings.EqualizerEnabled,
 		EqualizerPreamp:  a.settings.EqualizerPreamp,
@@ -196,6 +206,31 @@ func (a *app) renderHifiSettings(c *ui.Context, group func(title string, rows fu
 				})
 			}
 
+			row("hifi-mpv-channels", "空间音频输出", "自动跟随系统；多声道模式适合 HDMI 功放或 USB 多声道声卡，立体声模式会下混", func() {
+				labels := []string{"自动（跟随系统）", "立体声（下混）", "多声道（5.1 / 7.1.4）"}
+				values := []string{"auto-safe", "stereo", "fl-fr-fc-lfe-bl-br-sl-sr-tfl-tfr-tbl-tbr,5.1(side),stereo"}
+				chosen := labels[0]
+				for i, v := range values {
+					if v == s.MPVAudioChannels {
+						chosen = labels[i]
+					}
+				}
+				if ui.Select(c.Key("mpv-audio-channels"), &chosen, labels).Label("空间音频输出").Width(240).Changed() {
+					for i, label := range labels {
+						if label == chosen {
+							s.MPVAudioChannels = values[i]
+						}
+					}
+					a.changed()
+					a.syncMPVSettings()
+				}
+			})
+			row("hifi-mpv-spdif", "杜比 E-AC-3 直通", "将杜比全景声的 E-AC-3 原样交给 HDMI 功放解码；仅在功放支持 Atmos 时开启", func() {
+				if ui.Switch(c.Key("mpv-spdif"), &s.MPVAudioSpdif).Label("杜比 E-AC-3 直通").Changed() {
+					a.changed()
+					a.syncMPVSettings()
+				}
+			})
 			row("hifi-mpv-exclusive", "独占音频输出 (Exclusive Mode)", "绕过系统音频混音器，提供无损 Bit-perfect 直通原音输出", func() {
 				if ui.Switch(c.Key("mpv-exclusive"), &s.MPVExclusive).Label("独占音频输出").Changed() {
 					a.changed()

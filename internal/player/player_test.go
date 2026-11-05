@@ -243,3 +243,38 @@ func TestEndRadio(t *testing.T) {
 		t.Error("asked the radio after leaving it")
 	}
 }
+
+// A Dolby or surround stream can be kept in the cache as an MP4, not only
+// as MP3 or FLAC.
+func TestCacheKeepsMP4(t *testing.T) {
+	dir := t.TempDir()
+	c := NewCache(dir, 400)
+	f := c.part(&netease.Stream{Level: "dolby", Type: "mp4"})
+	f.Write(make([]byte, 100))
+	f.Close()
+	if _, ok := c.keep(1, &netease.Stream{Level: "dolby", Type: "mp4"}, f.Name(), 100); !ok {
+		t.Fatal("did not keep an MP4 stream")
+	}
+	dl, st, ok := c.lookup(1, "dolby")
+	if !ok || st.Type != "mp4" {
+		t.Fatalf("lookup: %v %+v", ok, st)
+	}
+	dl.Close()
+}
+
+// Without MPV, spatial levels go to the stereo spatial FLAC instead of a
+// silent or unsupported surround stream.
+func TestEffectiveLevelWithoutMPV(t *testing.T) {
+	p := &Player{}
+	for _, level := range []string{"sky", "dolby", "vivid"} {
+		if got := p.effectiveLevel(level); got != "jyeffect" {
+			t.Errorf("%s -> %s, want jyeffect", level, got)
+		}
+	}
+	if got := p.effectiveLevel("jymaster"); got != "jymaster" {
+		t.Errorf("jymaster -> %s", got)
+	}
+	if got := p.effectiveLevel("standard"); got != "standard" {
+		t.Errorf("standard -> %s", got)
+	}
+}
