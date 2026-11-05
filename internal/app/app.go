@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"time"
 
@@ -161,6 +162,9 @@ type app struct {
 	settingsWin *mygo.Window
 	cacheUsed   int64 // the bytes the song cache takes, -1 until measured
 	updates     bool  // the update plugin is used (useUpdater)
+
+	devClicks    int
+	devClickTime time.Time
 
 	appPlatformState
 
@@ -333,4 +337,38 @@ func Run() error {
 	mygo.App.OnActivate(func(bool) { a.showMain() })
 	mygo.App.OnSecondInstance(func([]string, string) { a.showMain() })
 	return mygo.App.Run()
+}
+
+func (a *app) onVersionClicked() {
+	now := time.Now()
+	if now.Sub(a.devClickTime) > 3*time.Second {
+		a.devClicks = 0
+	}
+	a.devClickTime = now
+	a.devClicks++
+	if a.devClicks >= 5 {
+		a.devClicks = 0
+		a.settings.DeveloperMode = !a.settings.DeveloperMode
+		a.settings.save()
+		if a.settings.DeveloperMode {
+			a.toast = "已开启开发者模式"
+		} else {
+			a.toast = "已关闭开发者模式"
+		}
+		a.redraw()
+		if a.settingsWin != nil {
+			a.settingsWin.Invalidate()
+		}
+	} else if a.devClicks >= 3 {
+		remaining := 5 - a.devClicks
+		if a.settings.DeveloperMode {
+			a.toast = fmt.Sprintf("再点击 %d 次关闭开发者模式", remaining)
+		} else {
+			a.toast = fmt.Sprintf("再点击 %d 次开启开发者模式", remaining)
+		}
+		a.redraw()
+		if a.settingsWin != nil {
+			a.settingsWin.Invalidate()
+		}
+	}
 }

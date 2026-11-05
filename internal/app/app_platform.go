@@ -27,10 +27,13 @@ func (a *app) activePlatform() appplatform.Adapter {
 
 func (a *app) initPlatformState() {
 	newPlatformAdapters(a)
+	if a.settings.Platform == "" {
+		a.settings.Platform = string(platform.FnmusicID)
+	}
 	a.platformID = platform.ID(a.settings.Platform)
 	if !a.hasPlatform(a.platformID) {
-		a.platformID = platform.NeteaseID
-		a.settings.Platform = string(platform.NeteaseID)
+		a.platformID = platform.FnmusicID
+		a.settings.Platform = string(platform.FnmusicID)
 	}
 }
 
@@ -119,27 +122,33 @@ func (a *app) activeRuntime() appplatform.Runtime {
 }
 
 var platformOrder = map[platform.ID]int{
-	platform.NeteaseID:   0,
-	platform.QQMusicID:   1,
-	platform.FnmusicID:   2,
-	platform.NavidromeID: 3,
-	platform.JellyfinID:  4,
-	platform.GonicID:     5,
-	platform.SubsonicID:  6,
-	platform.SongloftID:  7,
+	platform.FnmusicID:   0,
+	platform.NavidromeID: 1,
+	platform.JellyfinID:  2,
+	platform.GonicID:     3,
+	platform.SubsonicID:  4,
+	platform.SongloftID:  5,
+	platform.NeteaseID:   6,
+	platform.QQMusicID:   7,
 }
 
 // platformInfos returns the identities available to the shared platform
-// selector in the canonical order. NetEase is the upstream shell and therefore
-// has no adapter; all other entries come from the registered adapter seam.
+// selector in the canonical order. NetEase and QQ Music are visible only
+// when DeveloperMode is activated in settings.
 func (a *app) platformInfos() []appplatform.Info {
-	infos := []appplatform.Info{neteasePlatformInfo()}
+	var infos []appplatform.Info
+	if a.settings.DeveloperMode {
+		infos = append(infos, neteasePlatformInfo())
+	}
 	for _, adapter := range a.platforms {
 		if adapter == nil {
 			continue
 		}
 		info := adapter.Info()
 		if info.ID == "" || info.ID == platform.NeteaseID {
+			continue
+		}
+		if info.ID == platform.QQMusicID && !a.settings.DeveloperMode {
 			continue
 		}
 		infos = append(infos, info)
@@ -162,6 +171,35 @@ func (a *app) platformInfos() []appplatform.Info {
 
 func neteasePlatformInfo() appplatform.Info {
 	return appplatform.Info{ID: platform.NeteaseID, Name: "网易云音乐", Comments: true, Podcasts: true, Quality: true, Normalize: true}
+}
+
+func (a *app) infoForPlatform(id platform.ID) appplatform.Info {
+	if id == platform.NeteaseID {
+		return neteasePlatformInfo()
+	}
+	if a != nil && a.platforms != nil {
+		if adapter := a.platforms[id]; adapter != nil {
+			return adapter.Info()
+		}
+	}
+	name := string(id)
+	switch id {
+	case platform.QQMusicID:
+		name = "QQ 音乐"
+	case platform.FnmusicID:
+		name = "飞牛音乐"
+	case platform.NavidromeID:
+		name = "Navidrome"
+	case platform.JellyfinID:
+		name = "Jellyfin"
+	case platform.GonicID:
+		name = "Gonic"
+	case platform.SubsonicID:
+		name = "Subsonic"
+	case platform.SongloftID:
+		name = "Songloft"
+	}
+	return appplatform.Info{ID: id, Name: name}
 }
 
 // platformAccent applies the active platform's brand colour, if it has one,

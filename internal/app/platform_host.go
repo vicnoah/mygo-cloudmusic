@@ -231,6 +231,10 @@ func (h platformHost) PlatformSwitcher(c *ui.Context) {
 // app. Platform pages call it after their own settings instead of copying
 // playback, cache, appearance or notch code into every adapter.
 func (h platformHost) SharedSettings(c *ui.Context) {
+	if h.a.toast != "" {
+		c.Toast(h.a.toast)
+		h.a.toast = ""
+	}
 	a, p, s := h.a, h.a.pal, &h.a.settings
 	cap := neteasePlatformInfo()
 	if active := a.activePlatform(); active != nil {
@@ -242,12 +246,26 @@ func (h platformHost) SharedSettings(c *ui.Context) {
 	}
 	row := func(key, label, desc string, control func()) {
 		ui.Row(c.Key(key)).Padding(12, 16).Gap(16).AlignItems(ui.Center).MinHeight(48).Children(func() {
-			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
-				ui.Text(c, label).FontSize(13.5).FontWeight(500)
-				if desc != "" {
-					ui.Text(c, desc).FontSize(12).TextColor(p.muted)
+			if key == "shared-version" {
+				b := ui.ButtonBase(c.Key("shared-version-btn")).Grow(1).Shrink(1).MinWidth(0).FocusRing(false).Label(label).Children(func() {
+					ui.Column(c).Gap(3).Children(func() {
+						ui.Text(c, label).FontSize(13.5).FontWeight(500)
+						if desc != "" {
+							ui.Text(c, desc).FontSize(12).TextColor(p.muted)
+						}
+					})
+				})
+				if b.Clicked() {
+					a.onVersionClicked()
 				}
-			})
+			} else {
+				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
+					ui.Text(c, label).FontSize(13.5).FontWeight(500)
+					if desc != "" {
+						ui.Text(c, desc).FontSize(12).TextColor(p.muted)
+					}
+				})
+			}
 			control()
 		})
 	}
@@ -422,6 +440,10 @@ func (h platformHost) SharedSettings(c *ui.Context) {
 					checkForUpdates()
 				}
 			})
+		})
+	} else {
+		group("关于", func() {
+			row("shared-version", "当前版本 "+mygo.App.Version(), "", func() {})
 		})
 	}
 }

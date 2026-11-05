@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/egoist/mygo"
+	"netease-music-mygo/internal/platform"
 )
 
 // desktopLyricsSettings are the desktop lyric window's persistent choices.
@@ -111,7 +112,19 @@ type settings struct {
 }
 
 func defaultSettings() settings {
-	return settings{NotchActivity: true, Quality: "exhigh", Appearance: "system", Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, Captions: true, EqualizerPreset: "flat"}
+	s := settings{
+		NotchActivity:   true,
+		Quality:         "exhigh",
+		Appearance:      "system",
+		Volume:          0.8,
+		Normalize:       true,
+		AppIcon:         "dock-and-menubar",
+		CacheMB:         2048,
+		Captions:        true,
+		EqualizerPreset: "flat",
+	}
+	s.Platform = string(platform.FnmusicID)
+	return s
 }
 
 func settingsPath() (string, error) {

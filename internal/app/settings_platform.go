@@ -17,8 +17,9 @@ import (
 // provider-specific values remain neutral seam types; validation and
 // interpretation belong to the provider adapter.
 type platformSettings struct {
-	Platform  string                       `json:"platform,omitempty"`
-	FnMusic   appplatform.PlatformSettings `json:"fnmusic,omitempty"`
+	Platform      string                       `json:"platform,omitempty"`
+	DeveloperMode bool                         `json:"developerMode,omitempty"`
+	FnMusic       appplatform.PlatformSettings `json:"fnmusic,omitempty"`
 	QQMusic   appplatform.PlatformSettings `json:"qqmusic,omitempty"`
 	Navidrome appplatform.PlatformSettings `json:"navidrome,omitempty"`
 	Jellyfin  appplatform.PlatformSettings `json:"jellyfin,omitempty"`
@@ -104,9 +105,22 @@ func (a *app) platformQualityLevels() []struct{ level, label string } {
 }
 
 func (a *app) platformSettingsGroup(c *ui.Context, group func(string, func()), row func(string, string, func())) {
+	infos := a.platformInfos()
+	currentInInfos := false
+	for _, info := range infos {
+		if info.ID == a.platformID {
+			currentInInfos = true
+			break
+		}
+	}
+	if !currentInInfos && a.platformID != "" {
+		infos = append(infos, a.infoForPlatform(a.platformID))
+	}
+	if len(infos) == 0 {
+		return
+	}
 	group("平台", func() {
 		row("音乐平台", "切换后主页和平台设置使用独立的上下文", func() {
-			infos := a.platformInfos()
 			labels := make([]string, len(infos))
 			for i, info := range infos {
 				labels[i] = info.Name

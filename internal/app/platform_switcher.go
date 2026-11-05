@@ -81,7 +81,24 @@ func platformName(infos []appplatform.Info, id platform.ID) string {
 			return info.Name
 		}
 	}
-	return "网易云音乐"
+	switch id {
+	case platform.QQMusicID:
+		return "QQ 音乐"
+	case platform.FnmusicID:
+		return "飞牛音乐"
+	case platform.NavidromeID:
+		return "Navidrome"
+	case platform.JellyfinID:
+		return "Jellyfin"
+	case platform.GonicID:
+		return "Gonic"
+	case platform.SubsonicID:
+		return "Subsonic"
+	case platform.SongloftID:
+		return "Songloft"
+	default:
+		return "网易云音乐"
+	}
 }
 
 func platformIcon(id platform.ID) *ui.SVG {

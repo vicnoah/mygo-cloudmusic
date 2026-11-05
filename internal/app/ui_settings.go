@@ -2,6 +2,7 @@ package app
 
 import (
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -50,6 +51,10 @@ func (a *app) changed() {
 }
 
 func (a *app) settingsView(c *ui.Context) {
+	if a.toast != "" {
+		c.Toast(a.toast)
+		a.toast = ""
+	}
 	c.OnShortcut(ui.Cmd, ui.KeyW, func() { a.settingsWin.Close() })
 	if home := a.activeHome(); home != nil {
 		home.Settings(c)
@@ -70,12 +75,26 @@ func (a *app) settingsView(c *ui.Context) {
 		}
 		row := func(label, desc string, control func()) {
 			ui.Row(c).Padding(12, 16).Gap(16).AlignItems(ui.Center).MinHeight(48).Children(func() {
-				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
-					ui.Text(c, label).FontSize(13.5).FontWeight(500)
-					if desc != "" {
-						ui.Text(c, desc).FontSize(12).TextColor(p.muted).LineHeight(1.4)
+				if strings.HasPrefix(label, "当前版本") {
+					b := ui.ButtonBase(c.Key("version-click")).Grow(1).Shrink(1).MinWidth(0).FocusRing(false).Label(label).Children(func() {
+						ui.Column(c).Gap(3).Children(func() {
+							ui.Text(c, label).FontSize(13.5).FontWeight(500)
+							if desc != "" {
+								ui.Text(c, desc).FontSize(12).TextColor(p.muted).LineHeight(1.4)
+							}
+						})
+					})
+					if b.Clicked() {
+						a.onVersionClicked()
 					}
-				})
+				} else {
+					ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
+						ui.Text(c, label).FontSize(13.5).FontWeight(500)
+						if desc != "" {
+							ui.Text(c, desc).FontSize(12).TextColor(p.muted).LineHeight(1.4)
+						}
+					})
+				}
 				control()
 			})
 		}
@@ -272,6 +291,10 @@ func (a *app) settingsView(c *ui.Context) {
 						checkForUpdates()
 					}
 				})
+			})
+		} else {
+			group("关于", func() {
+				row("当前版本 "+mygo.App.Version(), "", func() {})
 			})
 		}
 	})
