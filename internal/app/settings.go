@@ -8,6 +8,10 @@ import (
 	"github.com/egoist/mygo"
 )
 
+// multichannelLayout is the speaker whitelist MPV tries from 7.1.4 down to
+// 5.1 and stereo, matching the channel order of the AV3A helper's WAV.
+const multichannelLayout = "fl-fr-fc-lfe-bl-br-sl-sr-tfl-tfr-tbl-tbr,5.1(side),stereo"
+
 // desktopLyricsSettings are the desktop lyric window's persistent choices.
 // A pointer in settings keeps older settings files compatible: missing
 // desktop-lyrics data gets the current defaults on first use.
@@ -99,10 +103,17 @@ type settings struct {
 	MPVAudioDevice string `json:"mpvAudioDevice,omitempty"`
 	// MPVAudioChannels is MPV's output channel layout: "auto-safe",
 	// "stereo", or an explicit speaker whitelist for multichannel output.
+	// It is kept for settings written before SpatialMode existed.
 	MPVAudioChannels string `json:"mpvAudioChannels,omitempty"`
 	// MPVAudioSpdif passes E-AC-3 through to an HDMI receiver instead of
 	// decoding its core in MPV.
 	MPVAudioSpdif bool `json:"mpvAudioSpdif,omitempty"`
+	// SpatialMode is how multichannel streams are rendered: "auto",
+	// "speakers", "headphones" or "stereo".
+	SpatialMode string `json:"spatialMode,omitempty"`
+	// HrtfProfile selects the headphone crossfeed width: "balanced" or
+	// "wide". MPV builds without a SOFA/HRTF filter use crossfeed.
+	HrtfProfile string `json:"hrtfProfile,omitempty"`
 
 	// EqualizerEnabled toggles graphic EQ processing in MPV.
 	EqualizerEnabled bool `json:"equalizerEnabled,omitempty"`
@@ -117,7 +128,30 @@ type settings struct {
 }
 
 func defaultSettings() settings {
-	return settings{NotchActivity: true, Quality: "exhigh", Appearance: "system", Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, Captions: true, EqualizerPreset: "flat", MPVAudioChannels: "auto-safe"}
+	return settings{NotchActivity: true, Quality: "exhigh", Appearance: "system", Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, Captions: true, EqualizerPreset: "flat", MPVAudioChannels: "auto-safe", SpatialMode: "auto", HrtfProfile: "balanced"}
+}
+
+// spatialMode returns the configured spatial mode, migrating the old
+// channel setting when SpatialMode has not been written yet.
+func (s settings) spatialMode() string {
+	if s.SpatialMode != "" {
+		return s.SpatialMode
+	}
+	switch s.MPVAudioChannels {
+	case "stereo":
+		return "stereo"
+	case multichannelLayout:
+		return "speakers"
+	default:
+		return "auto"
+	}
+}
+
+func (s settings) hrtfProfile() string {
+	if s.HrtfProfile == "wide" {
+		return "wide"
+	}
+	return "balanced"
 }
 
 func settingsPath() (string, error) {

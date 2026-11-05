@@ -56,6 +56,18 @@ func TestFallbackLevels(t *testing.T) {
 	}
 }
 
+// AV3A is a valid NetEase stream type: it is Audio Vivid in an MP4 wrapper,
+// decoded by the bundled helper. A previous parser rejected it as
+// "unsupported format av3a" and silently fell back to a lower quality.
+func TestAV3AStreamType(t *testing.T) {
+	if !streamTypeSupported("av3a") {
+		t.Fatal("av3a should be supported")
+	}
+	if streamTypeSupported("exe") {
+		t.Fatal("exe should not be supported")
+	}
+}
+
 // The response parser keeps the fields that decide the container, channel
 // layout and whether the server capped the level.
 func TestSongURLResponseFields(t *testing.T) {

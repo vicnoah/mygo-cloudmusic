@@ -19,6 +19,14 @@ MyGo 当前只实现了 5 档网易云音质：`standard / higher / exhigh / los
 
 > 核心结论：`sky` 的 5.1 空间感可以通过 MPV 多声道输出直接获得；`vivid` 的空间感必须先把 AV3A 解成 12 声道 PCM（7.1.4），再做多声道输出或双耳渲染。二者都不是“加一个音质字符串”就能完成，必须补齐“取链 → 解封装 → 解码 → 声道映射 → 输出/渲染”整条链路。
 
+## 实施状态（0.2.17）
+
+- Phase 0：10 档枚举、`encodeType`、`channelLayout` / `immerseType`、interface3/interfacepc 与 `-460` 回退、HarmonyOS vivid 指纹、逐档降级、播放页「已降档」标记已完成。
+- Phase 1：`jyeffect` / `sky` / `jymaster` / `dolby` 的 MPV 解码、缓存、UI、徽标与 DLNA MIME 映射已完成。
+- Phase 2：`vivid` 的 AV3A helper 已随 macOS arm64 包分发；取流、解码 12ch 7.1.4 WAV、MPV 播放链路已实测。MOLAN-AV3A 仍为非 OSI 许可，正式分发前需法务确认。
+- Phase 3：`audio-channels` 多声道、空间音频模式（自动 / 扬声器 / 耳机 / 下混）、耳机串扰下混、杜比 E-AC-3 直通、设备选择 UI 已完成。当前内置 MPV 未启用 libmysofa，耳机模式在无 HRTF 时明确使用低串扰下混，UI 已标注；`jyeffect` 不重复叠加 HRTF。
+- Phase 4：macOS arm64 安装包、Windows/Linux 交叉编译、真实账号播放验证与文档更新已完成；Windows/Linux 无 AV3A helper 时 `vivid` 自动降级。
+
 ---
 
 ## 1. Ncrust 的参考价值

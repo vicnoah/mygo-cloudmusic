@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -26,15 +27,19 @@ func BinaryPath() string {
 		return p
 	}
 	candidates := make([]string, 0, 3)
-	if dir, err := mygo.App.Path(mygo.PathResources); err == nil {
-		candidates = append(candidates, filepath.Join(dir, "molan-av3a"))
-	}
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		candidates = append(candidates,
-			filepath.Join(dir, "..", "Resources", "molan-av3a"),
-			filepath.Join(dir, "resources", "molan-av3a"),
-		)
+	// The bundled helper is a macOS arm64 binary. On other targets it must
+	// not be treated as usable; set MYGO_AV3A_BINARY to a native build.
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		if dir, err := mygo.App.Path(mygo.PathResources); err == nil {
+			candidates = append(candidates, filepath.Join(dir, "molan-av3a"))
+		}
+		if exe, err := os.Executable(); err == nil {
+			dir := filepath.Dir(exe)
+			candidates = append(candidates,
+				filepath.Join(dir, "..", "Resources", "molan-av3a"),
+				filepath.Join(dir, "resources", "molan-av3a"),
+			)
+		}
 	}
 	for _, p := range candidates {
 		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {

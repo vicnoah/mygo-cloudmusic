@@ -62,6 +62,13 @@ type Config struct {
 	// AudioSpdif passes these codecs through undecoded, such as "eac3" to
 	// an HDMI receiver for Dolby Atmos.
 	AudioSpdif string
+	// SpatialMode is "auto", "speakers", "headphones" or "stereo". Only
+	// headphones adds a binaural/crossfeed filter; the others leave the
+	// channel layout to AudioChannels.
+	SpatialMode string
+	// HrtfProfile selects the headphone crossfeed width: "balanced" or
+	// "wide".
+	HrtfProfile string
 	// Gapless enables gapless playback for consecutive tracks.
 	Gapless bool
 	// Equalizer settings
@@ -82,13 +89,14 @@ type Engine struct {
 	onEnd   func()
 	onError func(string)
 
-	playing   bool
-	position  time.Duration
-	duration  time.Duration
-	volume    float64
-	eqEnabled bool
-	eqPreamp  float64
-	eqGains   [10]float64
+	playing        bool
+	position       time.Duration
+	duration       time.Duration
+	volume         float64
+	eqEnabled      bool
+	eqPreamp       float64
+	eqGains        [10]float64
+	spatialEnabled bool
 
 	eventDone chan struct{}
 }
@@ -129,13 +137,14 @@ func NewEngine(cfg Config) (*Engine, error) {
 	}
 
 	e := &Engine{
-		inst:      inst,
-		cfg:       cfg,
-		volume:    0.8,
-		eqEnabled: cfg.EqualizerEnabled,
-		eqPreamp:  cfg.EqualizerPreamp,
-		eqGains:   cfg.EqualizerGains,
-		eventDone: make(chan struct{}),
+		inst:           inst,
+		cfg:            cfg,
+		volume:         0.8,
+		eqEnabled:      cfg.EqualizerEnabled,
+		eqPreamp:       cfg.EqualizerPreamp,
+		eqGains:        cfg.EqualizerGains,
+		spatialEnabled: true,
+		eventDone:      make(chan struct{}),
 	}
 
 	// Apply initial equalizer filters if enabled
@@ -333,6 +342,11 @@ func (e *Engine) applyAudioFiltersLocked() {
 			filters = append(filters, f)
 		}
 	}
+	if e.spatialEnabled {
+		if f := BuildSpatialFilter(e.cfg.SpatialMode, e.cfg.HrtfProfile); f != "" {
+			filters = append(filters, f)
+		}
+	}
 	e.inst.SetProperty("af", strings.Join(filters, ","))
 }
 
@@ -351,6 +365,7 @@ func (e *Engine) OnError(fn func(string)) {
 }
 
 func (e *Engine) runEvents() {
+	defer close(e.eventDone)
 	for {
 		e.mu.RLock()
 		inst := e.inst
@@ -483,6 +498,16 @@ func (e *Engine) SetAudioDevice(dev string) {
 	}
 }
 
+// SetSpatialOptions updates the spatial filter while the engine is playing.
+// enabled is false for stereo sources and for jyeffect, which is already
+// spatialised and must not be processed twice.
+func (e *Engine) SetSpatialOptions(mode, profile string, enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cfg.SpatialMode, e.cfg.HrtfProfile, e.spatialEnabled = mode, profile, enabled
+	e.applyAudioFiltersLocked()
+}
+
 // SetAudioOptions updates the channel layout and SP-DIF passthrough while
 // the engine is playing. Empty strings leave MPV's defaults.
 func (e *Engine) SetAudioOptions(channels, spdif string) {
@@ -525,6 +550,12 @@ func (e *Engine) Close() {
 	e.inst = nil
 	e.mu.Unlock()
 
+	// Let the event goroutine leave mpv_wait_event before the native handle
+	// is destroyed; destroying it underneath a waiting call can crash.
+	select {
+	case <-e.eventDone:
+	case <-time.After(time.Second):
+	}
 	if inst != nil {
 		inst.Close()
 	}

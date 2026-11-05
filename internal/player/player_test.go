@@ -278,3 +278,18 @@ func TestEffectiveLevelWithoutMPV(t *testing.T) {
 		t.Errorf("standard -> %s", got)
 	}
 }
+
+// jyeffect is already spatialised and must not get a second HRTF pass;
+// true surround and immersive levels should.
+func TestSpatialProcessingFor(t *testing.T) {
+	for _, level := range []string{"sky", "dolby", "vivid"} {
+		if !spatialProcessingFor(level) {
+			t.Errorf("%s should use spatial processing", level)
+		}
+	}
+	for _, level := range []string{"jyeffect", "jymaster", "lossless", "standard"} {
+		if spatialProcessingFor(level) {
+			t.Errorf("%s should not use spatial processing", level)
+		}
+	}
+}

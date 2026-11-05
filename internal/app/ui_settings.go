@@ -19,11 +19,11 @@ func (a *app) openSettings() {
 	a.measureCache()
 	a.settingsWin = mygo.NewWindow(mygo.WindowOptions{
 		Title:           "设置",
-		Width:           560,
-		Height:          720,
-		MinWidth:        480,
-		MinHeight:       420,
-		StateKey:        "settings",
+		Width:           720,
+		Height:          780,
+		MinWidth:        620,
+		MinHeight:       520,
+		StateKey:        "settings-v2",
 		DisableMaximize: true,
 		DisableMinimize: true,
 		// The app's menu has nothing for this window: on Linux and
@@ -63,20 +63,20 @@ func (a *app) settingsView(c *ui.Context) {
 	c.Root().Background(p.sidebar)
 	s := &a.settings
 
-	ui.Scroll(c).Fill().Padding(24, 28, 32, 28).Gap(8).Children(func() {
+	ui.Scroll(c).Fill().Padding(32, 30, 36, 32).Gap(10).Children(func() {
 		group := func(title string, rows func()) {
-			ui.Text(c, title).FontSize(12).FontWeight(600).TextColor(p.muted).Margin(14, 4, 4, 4)
-			ui.Column(c).Radius(12).Background(p.bg).Border(1, p.hairline).Dividers(1, p.hairline).Children(rows)
+			ui.Text(c, title).FontSize(12).FontWeight(600).TextColor(p.muted).Margin(16, 8, 4, 4)
+			ui.Column(c).Radius(14).Background(p.bg).Border(1, p.hairline).Dividers(1, p.hairline).Children(rows)
 		}
 		row := func(label, desc string, control func()) {
-			ui.Row(c).Padding(12, 16).Gap(16).AlignItems(ui.Center).MinHeight(48).Children(func() {
-				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
-					ui.Text(c, label).FontSize(13.5).FontWeight(500)
+			ui.Row(c).Padding(14, 18).Gap(24).AlignItems(ui.Center).MinHeight(56).Children(func() {
+				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(4).Children(func() {
+					ui.Text(c, label).FontSize(14).FontWeight(500)
 					if desc != "" {
-						ui.Text(c, desc).FontSize(12).TextColor(p.muted).LineHeight(1.4)
+						ui.Text(c, desc).FontSize(12.5).TextColor(p.muted).LineHeight(1.45)
 					}
 				})
-				control()
+				ui.Column(c).Width(280).Shrink(0).AlignItems(ui.End).Children(control)
 			})
 		}
 
@@ -93,7 +93,7 @@ func (a *app) settingsView(c *ui.Context) {
 							chosen = ic.label
 						}
 					}
-					if ui.Select(c.Key("app-icon"), &chosen, labels).Label("应用图标").Width(150).Changed() {
+					if ui.Select(c.Key("app-icon"), &chosen, labels).Label("应用图标").Width(220).Changed() {
 						for _, ic := range appIcons {
 							if ic.label == chosen {
 								s.AppIcon = ic.id
@@ -128,7 +128,7 @@ func (a *app) settingsView(c *ui.Context) {
 		}
 
 		group("播放", func() {
-			row("音质", "无损、Hi-Res、高清臻音需黑胶 VIP；沉浸环绕声、超清母带、杜比全景声、臻音全景声需黑胶 SVIP；空间音频需要高级解码引擎；下一首歌曲开始生效", func() {
+			row("音质", "无损与 Hi-Res 需黑胶 VIP；沉浸环绕声、超清母带、杜比全景声与臻音全景声需黑胶 SVIP。无对应权益时自动降档，播放页会标注；切换在下一首生效。", func() {
 				labels := make([]string, len(qualityLevels))
 				chosen := qualityLevels[2].label
 				for i, q := range qualityLevels {
@@ -137,7 +137,7 @@ func (a *app) settingsView(c *ui.Context) {
 						chosen = q.label
 					}
 				}
-				if ui.Select(c.Key("quality"), &chosen, labels).Label("音质").Width(240).Changed() {
+				if ui.Select(c.Key("quality"), &chosen, labels).Label("音质").Width(260).Changed() {
 					for _, q := range qualityLevels {
 						if q.label == chosen {
 							s.Quality = q.level
@@ -177,7 +177,7 @@ func (a *app) settingsView(c *ui.Context) {
 						chosen = l.label
 					}
 				}
-				if ui.Select(c.Key("cache"), &chosen, labels).Label("歌曲缓存").Width(150).Changed() {
+				if ui.Select(c.Key("cache"), &chosen, labels).Label("歌曲缓存").Width(200).Changed() {
 					for _, l := range cacheLimits {
 						if l.label == chosen {
 							s.CacheMB = l.mb

@@ -466,6 +466,18 @@ func SongURL(id int64, level string) (*Stream, error) {
 	return nil, ErrUnavailable
 }
 
+// streamTypeSupported reports whether the player can consume a stream
+// container. Audio Vivid arrives as AV3A in an MP4 wrapper and is decoded by
+// the helper before playback, so the type is legitimate too.
+func streamTypeSupported(typ string) bool {
+	switch typ {
+	case "mp3", "flac", "mp4", "m4a", "av3a":
+		return true
+	default:
+		return false
+	}
+}
+
 // songURLHost returns the preferred host for level and the host to try if
 // it answers -460. The older levels keep the desktop host they have always
 // used; the newer immersive levels use interface3, which Ncrust found
@@ -501,6 +513,16 @@ func songURLAt(id int64, level string) (*Stream, error) {
 		res = songURLResponse{}
 		err = eapiPostAt(other, profile, "/api/song/enhance/player/url/v1", req, &res)
 	}
+	actual, typ, channels, hasURL, trial := "", "", "", false, false
+	itemCode, br, sr := 0, int64(0), 0
+	if len(res.Data) > 0 {
+		d := res.Data[0]
+		actual, typ, channels, hasURL = d.Level, d.Type, d.ChannelLayout, d.URL != ""
+		itemCode, br, sr = d.Code, d.BR, d.SR
+		trial = len(d.FreeTrialInfo) > 0 && string(d.FreeTrialInfo) != "null"
+	}
+	debugLog("songurl id=%d requested=%s actual=%s type=%s br=%d sr=%d channels=%q itemCode=%d items=%d url=%t trial=%t code=%d host=%s os=%s appver=%s err=%v",
+		id, level, actual, typ, br, sr, channels, itemCode, len(res.Data), hasURL, trial, res.Code, host, profile["os"], profile["appver"], err)
 	if err != nil {
 		return nil, err
 	}
@@ -526,9 +548,7 @@ func songURLAt(id int64, level string) (*Stream, error) {
 	if s.Type == "" {
 		s.Type = EncodeType(level)
 	}
-	switch s.Type {
-	case "mp3", "flac", "mp4", "m4a":
-	default:
+	if !streamTypeSupported(s.Type) {
 		return nil, fmt.Errorf("unsupported format %s", s.Type)
 	}
 	if d.Peak != nil {

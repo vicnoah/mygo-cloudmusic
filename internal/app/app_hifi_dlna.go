@@ -18,7 +18,14 @@ func (a *app) syncMPVSettings() {
 	if a.settings.MPVAudioSpdif {
 		spdif = "eac3"
 	}
+	mode := a.settings.spatialMode()
 	channels := a.settings.MPVAudioChannels
+	switch mode {
+	case "speakers":
+		channels = multichannelLayout
+	case "headphones", "stereo":
+		channels = "stereo"
+	}
 	if channels == "" {
 		channels = "auto-safe"
 	}
@@ -29,6 +36,8 @@ func (a *app) syncMPVSettings() {
 		AudioDevice:      a.settings.MPVAudioDevice,
 		AudioChannels:    channels,
 		AudioSpdif:       spdif,
+		SpatialMode:      mode,
+		HrtfProfile:      a.settings.hrtfProfile(),
 		Gapless:          a.settings.MPVGapless,
 		EqualizerEnabled: a.settings.EqualizerEnabled,
 		EqualizerPreamp:  a.settings.EqualizerPreamp,
@@ -196,7 +205,7 @@ func (a *app) renderHifiSettings(c *ui.Context, group func(title string, rows fu
 				}
 
 				row("hifi-mpv-device", "音频输出设备", "独立选择音频路由设备 (如耳机、板载声卡或外置 USB DAC/耳放)", func() {
-					if ui.Select(c.Key("mpv-audio-device"), &chosenDevLabel, devLabels).Label("音频输出设备").Width(240).Changed() {
+					if ui.Select(c.Key("mpv-audio-device"), &chosenDevLabel, devLabels).Label("音频输出设备").Width(220).Changed() {
 						if targetName, ok := labelToDevName[chosenDevLabel]; ok {
 							s.MPVAudioDevice = targetName
 							a.changed()
@@ -206,25 +215,47 @@ func (a *app) renderHifiSettings(c *ui.Context, group func(title string, rows fu
 				})
 			}
 
-			row("hifi-mpv-channels", "空间音频输出", "自动跟随系统；多声道模式适合 HDMI 功放或 USB 多声道声卡，立体声模式会下混", func() {
-				labels := []string{"自动（跟随系统）", "立体声（下混）", "多声道（5.1 / 7.1.4）"}
-				values := []string{"auto-safe", "stereo", "fl-fr-fc-lfe-bl-br-sl-sr-tfl-tfr-tbl-tbr,5.1(side),stereo"}
+			row("hifi-mpv-spatial", "空间音频模式", "自动跟随系统；多声道扬声器适合 HDMI 功放或 USB 多声道声卡；耳机模式在无 SOFA/HRTF 组件时使用低串扰立体声下混；高清臻音已是空间化立体声，不会再叠加 HRTF", func() {
+				labels := []string{"自动（跟随系统）", "多声道扬声器（5.1 / 7.1.4）", "耳机空间化（串扰下混）", "立体声（下混）"}
+				values := []string{"auto", "speakers", "headphones", "stereo"}
 				chosen := labels[0]
+				mode := s.spatialMode()
 				for i, v := range values {
-					if v == s.MPVAudioChannels {
+					if v == mode {
 						chosen = labels[i]
 					}
 				}
-				if ui.Select(c.Key("mpv-audio-channels"), &chosen, labels).Label("空间音频输出").Width(240).Changed() {
+				if ui.Select(c.Key("mpv-spatial-mode"), &chosen, labels).Label("空间音频模式").Width(220).Changed() {
 					for i, label := range labels {
 						if label == chosen {
-							s.MPVAudioChannels = values[i]
+							s.SpatialMode = values[i]
 						}
 					}
 					a.changed()
 					a.syncMPVSettings()
 				}
 			})
+			if s.spatialMode() == "headphones" {
+				row("hifi-mpv-hrtf", "耳机空间化强度", "均衡适合日常聆听；宽广会加深串扰与声场宽度，可能牺牲一点人声定位", func() {
+					labels := []string{"均衡", "宽广"}
+					values := []string{"balanced", "wide"}
+					chosen := labels[0]
+					for i, v := range values {
+						if v == s.hrtfProfile() {
+							chosen = labels[i]
+						}
+					}
+					if ui.Select(c.Key("mpv-hrtf-profile"), &chosen, labels).Label("耳机空间化强度").Width(220).Changed() {
+						for i, label := range labels {
+							if label == chosen {
+								s.HrtfProfile = values[i]
+							}
+						}
+						a.changed()
+						a.syncMPVSettings()
+					}
+				})
+			}
 			row("hifi-mpv-spdif", "杜比 E-AC-3 直通", "将杜比全景声的 E-AC-3 原样交给 HDMI 功放解码；仅在功放支持 Atmos 时开启", func() {
 				if ui.Switch(c.Key("mpv-spdif"), &s.MPVAudioSpdif).Label("杜比 E-AC-3 直通").Changed() {
 					a.changed()

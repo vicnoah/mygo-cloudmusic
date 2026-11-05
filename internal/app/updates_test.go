@@ -37,7 +37,7 @@ func TestTurnOffUpdateChecks(t *testing.T) {
 	a := newTestApp()
 	a.settings = defaultSettings()
 	a.updates = true
-	tt := ui.NewTester(a.settingsView, 560, 2000)
+	tt := ui.NewTester(a.settingsView, 560, 2600)
 	tt.Frame()
 	// The row's title is labelled as its switch is: click the switch, at
 	// the row's end.
@@ -76,7 +76,7 @@ func TestCheckForUpdatesFromSettings(t *testing.T) {
 	a.settings = defaultSettings()
 	a.updates = true
 	a.profile = &netease.Profile{UserID: 1}
-	tt := ui.NewTester(a.settingsView, 560, 2000)
+	tt := ui.NewTester(a.settingsView, 560, 2600)
 	tt.Frame()
 	if err := tt.Click("检查更新"); err != nil {
 		t.Fatal(err)

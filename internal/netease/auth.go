@@ -117,6 +117,8 @@ type Profile struct {
 	UserID    int64  `json:"userId"`
 	Nickname  string `json:"nickname"`
 	AvatarURL string `json:"avatarUrl"`
+	VipType   int    `json:"vipType"`
+	VipLevel  int    `json:"vipLevel"`
 }
 
 // Account returns the profile of who is signed in, or nil.
@@ -125,6 +127,9 @@ func Account() (*Profile, error) {
 		Profile *Profile `json:"profile"`
 	}
 	err := get("/api/nuser/account/get", nil, &res)
+	if res.Profile != nil {
+		debugLog("account user=%d nick=%q vipType=%d vipLevel=%d", res.Profile.UserID, res.Profile.Nickname, res.Profile.VipType, res.Profile.VipLevel)
+	}
 	return res.Profile, err
 }
 

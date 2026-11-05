@@ -533,6 +533,11 @@ func (p *Player) SetMPVConfig(cfg mpv.Config) {
 		p.mpvOut.SetEqualizer(cfg.EqualizerPreamp, cfg.EqualizerGains, cfg.EqualizerEnabled)
 		p.mpvOut.SetAudioDevice(cfg.AudioDevice)
 		p.mpvOut.SetAudioOptions(cfg.AudioChannels, cfg.AudioSpdif)
+		enabled := true
+		if p.info != nil {
+			enabled = spatialProcessingFor(p.info.Level)
+		}
+		p.mpvOut.SetSpatialOptions(cfg.SpatialMode, cfg.HrtfProfile, enabled)
 	}
 }
 
@@ -994,6 +999,9 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 				}
 
 				if playURL != "" {
+					// jyeffect is already a spatialised stereo master;
+					// applying crossfeed/HRTF again would colour it twice.
+					engine.SetSpatialOptions(p.mpvCfg.SpatialMode, p.mpvCfg.HrtfProfile, spatialProcessingFor(info.Level))
 					if err := engine.Play(playURL, nil, p.pending); err == nil {
 						p.fade.attach(mpvVolumeOutput{p: p, e: p.mpvOut}, fadeLevel)
 						p.applyGain()
@@ -1068,6 +1076,12 @@ func (p *Player) prefetchNextMPV(at, gen int) {
 	if !p.UsingMPV() || p.repeat == RepeatOne || p.mpvOut == nil {
 		return
 	}
+	// MPV's af graph is global, so an appended track would inherit the
+	// current track's HRTF/crossfeed filter. Headphone mode starts each
+	// track normally and chooses its filter from that track's level.
+	if p.mpvCfg.SpatialMode == "headphones" {
+		return
+	}
 	nextAt := at + 1
 	if nextAt >= len(p.order) {
 		if p.repeat == RepeatAll {
@@ -1135,6 +1149,13 @@ func (p *Player) prefetchNextMPV(at, gen int) {
 			}
 		})
 	}()
+}
+
+// spatialProcessingFor reports whether a level should go through the
+// headphone spatial filter. jyeffect is already spatialised by NetEase and
+// must not be processed twice; ordinary stereo has nothing to render.
+func spatialProcessingFor(level string) bool {
+	return netease.Spatial(level) && level != "jyeffect"
 }
 
 // effectiveLevel lowers a level the current output cannot play. Audio Vivid
