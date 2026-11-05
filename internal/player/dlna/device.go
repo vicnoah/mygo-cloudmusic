@@ -286,16 +286,17 @@ func (d *Device) Play(ctx context.Context) error {
 	if d.av == nil {
 		return errors.New("dlna: av transport client not available")
 	}
-	err := d.av.Play(ctx)
-	if err != nil {
-		// Many renderers return error 701 (Transition not available) immediately after SetAVTransportURI.
-		// Retrying once after 200ms allows the renderer firmware to complete its pipeline transition.
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		err = d.av.Play(ctx)
+		if err == nil {
+			return nil
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(300 * time.Millisecond):
 		}
-		err = d.av.Play(ctx)
 	}
 	return err
 }
@@ -330,29 +331,32 @@ func (d *Device) SetMedia(ctx context.Context, item *avtransport.MediaItem) erro
 		return errors.New("dlna: av transport client not available")
 	}
 
-	// 1. DLNA DMRs often return 501 / 705 if SetAVTransportURI is called while playing another track.
-	// We send a best-effort Stop with a short timeout to transition into a ready state.
-	stopCtx, stopCancel := context.WithTimeout(ctx, 1*time.Second)
-	_ = d.av.Stop(stopCtx)
-	stopCancel()
+	// Attempt SetAVTransportMedia directly without preemptive Stop.
+	// Sending Stop to an idle or stopped renderer causes error 701 on many devices (e.g. XiaoAi).
+	err := d.av.SetAVTransportMedia(ctx, item)
+	if err != nil {
+		stopCtx, stopCancel := context.WithTimeout(ctx, 1*time.Second)
+		_ = d.av.Stop(stopCtx)
+		stopCancel()
 
-	// Short settle interval before loading new metadata.
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(80 * time.Millisecond):
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(150 * time.Millisecond):
+		}
+
+		err = d.av.SetAVTransportMedia(ctx, item)
 	}
 
-	// 2. Set the media URI and DIDL-Lite metadata.
-	if err := d.av.SetAVTransportMedia(ctx, item); err != nil {
+	if err != nil {
 		return fmt.Errorf("set av transport media: %w", err)
 	}
 
-	// Short settle interval for renderer to parse DIDL-Lite before calling Play.
+	// Settle interval for renderer firmware to parse DIDL-Lite and allocate decoders before calling Play.
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(80 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond):
 	}
 
 	return nil

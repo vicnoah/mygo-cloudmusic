@@ -197,3 +197,53 @@ func TestVolumeAndTrackMeta(t *testing.T) {
 		t.Errorf("unexpected meta values: %+v", meta)
 	}
 }
+
+// Tests that switching active devices updates activeDevice and unselects previous target.
+func TestSelectDeviceSwitchesOldDevice(t *testing.T) {
+	ctrl, err := NewController(func() {})
+	if err != nil {
+		t.Fatalf("NewController: %v", err)
+	}
+	defer ctrl.Close()
+
+	devA := &Device{
+		ID:           "device-a",
+		FriendlyName: "Speaker A",
+		URL:          "http://192.168.1.10:8080/desc.xml",
+	}
+	devB := &Device{
+		ID:           "device-b",
+		FriendlyName: "Speaker B",
+		URL:          "http://192.168.1.20:8080/desc.xml",
+	}
+
+	ctrl.mu.Lock()
+	ctrl.knownDevices[devA.ID] = devA
+	ctrl.knownDevices[devB.ID] = devB
+	ctrl.rebuildDeviceListLocked()
+	ctrl.mu.Unlock()
+
+	// Select A
+	if err := ctrl.SelectDevice("device-a"); err != nil {
+		t.Fatalf("SelectDevice A: %v", err)
+	}
+	if ctrl.ActiveDevice() == nil || ctrl.ActiveDevice().ID != "device-a" {
+		t.Fatal("expected device-a to be active")
+	}
+
+	// Switch to B: should cleanly switch activeDevice to B
+	if err := ctrl.SelectDevice("device-b"); err != nil {
+		t.Fatalf("SelectDevice B: %v", err)
+	}
+	if ctrl.ActiveDevice() == nil || ctrl.ActiveDevice().ID != "device-b" {
+		t.Fatal("expected device-b to be active after switch")
+	}
+
+	// Switch to local: should clear activeDevice
+	if err := ctrl.SelectDevice(""); err != nil {
+		t.Fatalf("SelectDevice local: %v", err)
+	}
+	if ctrl.ActiveDevice() != nil {
+		t.Fatal("expected activeDevice to be nil after selecting local")
+	}
+}

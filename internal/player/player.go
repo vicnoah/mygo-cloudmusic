@@ -479,24 +479,24 @@ func (p *Player) SwitchOutput(devID string) {
 		return
 	}
 	wasCasting := p.IsCasting()
-	_ = p.dlnaCtrl.SelectDevice(devID)
-
-	if p.track == nil || p.at < 0 {
-		p.sync()
-		return
-	}
-
 	pos := p.Position()
 	playing := p.playing
 	at := p.at
 
-	// Stop previous output
+	// Stop previous output before selecting the new device target
 	if wasCasting {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		_ = p.dlnaCtrl.Stop(ctx)
 		cancel()
 	} else {
 		p.stop()
+	}
+
+	_ = p.dlnaCtrl.SelectDevice(devID)
+
+	if p.track == nil || p.at < 0 {
+		p.sync()
+		return
 	}
 
 	// Reload current track on new output target starting from current position
@@ -1136,6 +1136,13 @@ func (p *Player) prefetchNextDLNA(at, gen int) {
 	}
 	nextTrack := p.queue[p.order[nextAt]]
 	go func() {
+		// Delay staging the next track by 6 seconds so the DMR establishes its primary playback stream
+		// without receiving conflicting UPnP pipeline commands during startup (fixing XiaoAi / XiaoMing DMR startup stall).
+		time.Sleep(6 * time.Second)
+		if gen != p.gen || !p.IsCasting() {
+			return
+		}
+
 		level := "exhigh"
 		if p.Quality != nil {
 			level = p.Quality()

@@ -1,6 +1,7 @@
 package dlna
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -224,5 +225,54 @@ func TestDLNAProxyCover(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != string(coverData) {
 		t.Errorf("got body %q, want %q", string(body), string(coverData))
+	}
+}
+
+// Tests that multiple concurrent requests to the same stream URL complete without canceling each other.
+func TestDLNAProxyConcurrentStreams(t *testing.T) {
+	remoteServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("stream-chunk-data"))
+	}))
+	defer remoteServer.Close()
+
+	proxy, err := NewProxy()
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	defer proxy.Close()
+
+	streamURL := proxy.Register("track-concurrent", StreamSource{
+		RemoteURL:   remoteServer.URL,
+		ContentType: "audio/mpeg",
+	})
+
+	errCh := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			resp, err := http.Get(streamURL)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer resp.Body.Close()
+			b, err := io.ReadAll(resp.Body)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if string(b) != "stream-chunk-data" {
+				errCh <- fmt.Errorf("unexpected body: %q", string(b))
+				return
+			}
+			errCh <- nil
+		}()
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("concurrent stream request failed: %v", err)
+		}
 	}
 }

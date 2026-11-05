@@ -191,13 +191,14 @@ func (c *Controller) SelectDevice(deviceID string) error {
 		c.cancelPoll = nil
 	}
 
+	oldDev := c.activeDevice
 	if deviceID == "" {
-		if c.activeDevice != nil {
+		if oldDev != nil {
 			go func(d *Device) {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
 				_ = d.Stop(ctx)
-			}(c.activeDevice)
+			}(oldDev)
 		}
 		c.activeDevice = nil
 		c.playing = false
@@ -228,6 +229,15 @@ func (c *Controller) SelectDevice(deviceID string) error {
 	if found == nil {
 		c.mu.Unlock()
 		return fmt.Errorf("dlna: device %q not found", deviceID)
+	}
+
+	// If switching between two different DLNA devices, stop the previous one first
+	if oldDev != nil && oldDev.ID != found.ID {
+		go func(d *Device) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = d.Stop(ctx)
+		}(oldDev)
 	}
 
 	c.activeDevice = found
@@ -318,9 +328,21 @@ func (c *Controller) PlayTrack(ctx context.Context, meta TrackMeta, startPos tim
 		return fmt.Errorf("dlna: play: %w", err)
 	}
 
-	// 3. Apply initial seek offset if resuming from another output
+	// 3. Apply initial seek offset asynchronously if resuming from another output,
+	// waiting for renderer pipeline to buffer first (following Supersonic's pattern).
 	if startPos > 0 {
-		_ = dev.Seek(ctx, int(startPos.Seconds()))
+		go func() {
+			time.Sleep(2 * time.Second)
+			c.mu.RLock()
+			active := c.activeDevice
+			playing := c.playing
+			c.mu.RUnlock()
+			if playing && active == dev {
+				seekCtx, seekCancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer seekCancel()
+				_ = dev.Seek(seekCtx, int(startPos.Seconds()))
+			}
+		}()
 	}
 
 	pollCtx, cancel := context.WithCancel(context.Background())

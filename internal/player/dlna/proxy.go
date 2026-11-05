@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -38,8 +39,8 @@ type Proxy struct {
 	port          int
 	sources       map[string]StreamSource
 	covers        map[string]string
-	activeCancels map[string]context.CancelFunc
-	activeBodies  map[string]io.Closer
+	activeCancels map[string]map[uint64]context.CancelFunc
+	nextReqID     uint64
 	client        *http.Client
 }
 
@@ -58,8 +59,7 @@ func NewProxy() (*Proxy, error) {
 		port:          l.Addr().(*net.TCPAddr).Port,
 		sources:       make(map[string]StreamSource),
 		covers:        make(map[string]string),
-		activeCancels: make(map[string]context.CancelFunc),
-		activeBodies:  make(map[string]io.Closer),
+		activeCancels: make(map[string]map[uint64]context.CancelFunc),
 		client: &http.Client{
 			Transport: &http.Transport{
 				Proxy: http.ProxyFromEnvironment,
@@ -200,19 +200,19 @@ func (p *Proxy) detectLANIPFor(targetURL string) string {
 	return p.lanIP
 }
 
-// Unregister removes a stream source.
+// Unregister removes a stream source and cancels any active upstream connections for it.
 func (p *Proxy) Unregister(trackID string) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	delete(p.sources, trackID)
-	if closer, ok := p.activeBodies[trackID]; ok && closer != nil {
-		_ = closer.Close()
-		delete(p.activeBodies, trackID)
-	}
-	if cancel, ok := p.activeCancels[trackID]; ok && cancel != nil {
-		cancel()
+	if m, ok := p.activeCancels[trackID]; ok {
+		for _, cancel := range m {
+			if cancel != nil {
+				cancel()
+			}
+		}
 		delete(p.activeCancels, trackID)
 	}
+	p.mu.Unlock()
 }
 
 func buildContentFeatures(mimeType string) string {
@@ -226,6 +226,8 @@ func buildContentFeatures(mimeType string) string {
 	cf.WriteString("DLNA.ORG_FLAGS=01700000000000000000000000000000")
 	return cf.String()
 }
+
+const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 	rawID := r.URL.Path[len("/stream/"):]
@@ -252,7 +254,7 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("contentFeatures.dlna.org", cf)
 	}
 	w.Header().Set("transferMode.dlna.org", "Streaming")
-	w.Header().Set("Connection", "close")
+	// Notice: Keep-Alive is maintained for HTTP/1.1; do not force Connection: close.
 
 	// 1. If we have a local cached file, serve it directly with range support.
 	if src.LocalFile != "" {
@@ -274,13 +276,16 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 		client = http.DefaultClient
 	}
 
-	// Handle HEAD requests specifically to prevent 403 / 405 rejections from CDNs
+	// Handle HEAD requests specifically to learn content length while preventing 403 / 405 rejections from CDNs
 	if r.Method == http.MethodHead {
 		headReq, _ := http.NewRequestWithContext(r.Context(), http.MethodHead, src.RemoteURL, nil)
 		for k, vv := range src.Headers {
 			for _, v := range vv {
 				headReq.Header.Add(k, v)
 			}
+		}
+		if headReq.Header.Get("User-Agent") == "" {
+			headReq.Header.Set("User-Agent", defaultUserAgent)
 		}
 		headResp, err := client.Do(headReq)
 		if err == nil && headResp.StatusCode >= 200 && headResp.StatusCode < 300 {
@@ -309,6 +314,9 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 				probeReq.Header.Add(k, v)
 			}
 		}
+		if probeReq.Header.Get("User-Agent") == "" {
+			probeReq.Header.Set("User-Agent", defaultUserAgent)
+		}
 		probeReq.Header.Set("Range", "bytes=0-0")
 		probeResp, err := client.Do(probeReq)
 		if err == nil {
@@ -328,28 +336,23 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Cancel and close any previous in-flight upstream connection for this track.
-	p.mu.Lock()
-	if oldCloser, exists := p.activeBodies[key]; exists && oldCloser != nil {
-		_ = oldCloser.Close()
-		delete(p.activeBodies, key)
-	}
-	if oldCancel, exists := p.activeCancels[key]; exists && oldCancel != nil {
-		oldCancel()
-		delete(p.activeCancels, key)
-	}
-
+	reqID := atomic.AddUint64(&p.nextReqID, 1)
 	ctx, cancel := context.WithCancel(r.Context())
-	p.activeCancels[key] = cancel
+
+	p.mu.Lock()
+	if p.activeCancels[key] == nil {
+		p.activeCancels[key] = make(map[uint64]context.CancelFunc)
+	}
+	p.activeCancels[key][reqID] = cancel
 	p.mu.Unlock()
 
 	defer func() {
 		p.mu.Lock()
-		if p.activeCancels[key] != nil {
-			delete(p.activeCancels, key)
-		}
-		if p.activeBodies[key] != nil {
-			delete(p.activeBodies, key)
+		if m, ok := p.activeCancels[key]; ok {
+			delete(m, reqID)
+			if len(m) == 0 {
+				delete(p.activeCancels, key)
+			}
 		}
 		p.mu.Unlock()
 		cancel()
@@ -366,6 +369,9 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 			req.Header.Add(k, v)
 		}
 	}
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", defaultUserAgent)
+	}
 	if rng := r.Header.Get("Range"); rng != "" {
 		req.Header.Set("Range", rng)
 	}
@@ -376,10 +382,6 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-
-	p.mu.Lock()
-	p.activeBodies[key] = resp.Body
-	p.mu.Unlock()
 
 	for k, vv := range resp.Header {
 		for _, v := range vv {
@@ -405,18 +407,14 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 // Close shuts down the proxy server.
 func (p *Proxy) Close() error {
 	p.mu.Lock()
-	for _, closer := range p.activeBodies {
-		if closer != nil {
-			_ = closer.Close()
+	for _, m := range p.activeCancels {
+		for _, cancel := range m {
+			if cancel != nil {
+				cancel()
+			}
 		}
 	}
-	for _, cancel := range p.activeCancels {
-		if cancel != nil {
-			cancel()
-		}
-	}
-	p.activeBodies = make(map[string]io.Closer)
-	p.activeCancels = make(map[string]context.CancelFunc)
+	p.activeCancels = make(map[string]map[uint64]context.CancelFunc)
 	p.mu.Unlock()
 	if p.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
