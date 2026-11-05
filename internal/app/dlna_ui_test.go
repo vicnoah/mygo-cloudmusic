@@ -6,6 +6,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"netease-music-mygo/internal/netease"
 	"netease-music-mygo/internal/player/dlna"
+	"netease-music-mygo/internal/player/mpv"
 )
 
 // Tests that clicking the cast button toggles the DLNA device selection popover.
@@ -81,5 +82,74 @@ func TestActiveCastDeviceVisibleWhileScanning(t *testing.T) {
 	// Device must still be present and clickable despite ongoing scan
 	if err := tt.Click("Bedroom Speaker"); err != nil {
 		t.Fatalf("expected Bedroom Speaker to be visible and clickable in popover: %v", err)
+	}
+}
+
+// Tests that enabling the equalizer updates the player configuration and applies presets.
+func TestEqualizerSettingsAndPresets(t *testing.T) {
+	a := newTestApp()
+	a.settings.UseMPV = true
+	a.settings.EqualizerEnabled = true
+	a.settings.EqualizerPreset = "vocal"
+	preset, _ := mpv.FindPreset("vocal")
+	a.settings.EqualizerGains = preset.Gains
+	a.syncMPVSettings()
+
+	cfg := a.pl.MPVConfig()
+	if !cfg.EqualizerEnabled {
+		t.Error("expected EqualizerEnabled to be true in player config")
+	}
+	if cfg.EqualizerGains != preset.Gains {
+		t.Errorf("got gains %v, want %v", cfg.EqualizerGains, preset.Gains)
+	}
+}
+
+// Tests that clicking the equalizer button on the player bar toggles the EQ popover when MPV is ready.
+func TestEqualizerButtonTogglesPopover(t *testing.T) {
+	a := newTestApp()
+	a.settings.UseMPV = true
+	a.pl.SetUseMPV(true)
+	if !a.mpvReady() {
+		t.Skip("mpv not ready on this host")
+	}
+	a.pl.Cue([]netease.Track{{ID: 1, Name: "Test Track", Duration: 240000}})
+
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.playerBar(c)
+	}, 1200, 200)
+
+	if a.eqOpen {
+		t.Error("expected eqOpen to be false initially")
+	}
+
+	if err := tt.Click("图形均衡器 (EQ)"); err != nil {
+		t.Fatalf("expected to click equalizer button: %v", err)
+	}
+
+	if !a.eqOpen {
+		t.Error("expected eqOpen to be true after clicking equalizer button")
+	}
+}
+
+// Tests that audio output devices are enumerated and configurable through MPV settings.
+func TestAudioDeviceEnumerationAndSync(t *testing.T) {
+	a := newTestApp()
+	a.settings.UseMPV = true
+	a.pl.SetUseMPV(true)
+	if !a.mpvReady() {
+		t.Skip("mpv not ready on this host")
+	}
+
+	devs := a.pl.AudioDevices()
+	if len(devs) == 0 {
+		t.Fatal("expected at least one audio device from player")
+	}
+
+	a.settings.MPVAudioDevice = "auto"
+	a.syncMPVSettings()
+
+	cfg := a.pl.MPVConfig()
+	if cfg.AudioDevice != "auto" {
+		t.Errorf("got AudioDevice %q, want 'auto'", cfg.AudioDevice)
 	}
 }

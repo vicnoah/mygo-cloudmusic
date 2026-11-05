@@ -148,6 +148,7 @@ type app struct {
 	quiet                 quietState    // the quiet parts of the song playing, for its hot comments
 	captions              captionState  // the episode playing's captions, and the model that writes them
 	castOpen              bool
+	eqOpen                bool
 	dlnaScanning          bool
 	mpvDownloading        bool
 	mpvDone               int64

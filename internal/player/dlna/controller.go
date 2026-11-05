@@ -263,13 +263,20 @@ func (c *Controller) PlayTrack(ctx context.Context, meta TrackMeta, startPos tim
 	c.playStart = time.Now()
 	c.mu.Unlock()
 
+	// Register and route cover image through local proxy so smart TVs / screen renderers can safely fetch it on LAN
+	coverURI := meta.CoverURL
+	if meta.CoverURL != "" {
+		c.proxy.RegisterCover(meta.ID, meta.CoverURL)
+		coverURI = c.proxy.LANCoverURLFor(meta.ID, dev.URL)
+	}
+
 	// Assemble rich DIDL-Lite metadata compliant with UPnP MusicTrack specs
 	item := &avtransport.MediaItem{
 		URL:         lanURL,
 		Title:       meta.Title,
 		Artist:      meta.Artist,
 		Album:       meta.Album,
-		AlbumArtURI: meta.CoverURL,
+		AlbumArtURI: coverURI,
 		ContentType: mime,
 		Seekable:    true,
 		Duration:    meta.Duration,

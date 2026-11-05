@@ -192,3 +192,37 @@ func TestFormatToMIME(t *testing.T) {
 		}
 	}
 }
+
+// Tests that the DLNA proxy serves album cover images for smart TVs and screen renderers.
+func TestDLNAProxyCover(t *testing.T) {
+	proxy, err := NewProxy()
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	defer proxy.Close()
+
+	// 1. Local cover file
+	tmpDir := t.TempDir()
+	coverFile := filepath.Join(tmpDir, "cover.jpg")
+	coverData := []byte("fake-jpeg-cover-data")
+	if err := os.WriteFile(coverFile, coverData, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	proxy.RegisterCover("track-cover-1", coverFile)
+	coverURL := proxy.LANCoverURLFor("track-cover-1", "http://192.168.1.50:1400/desc.xml")
+
+	resp, err := http.Get(coverURL)
+	if err != nil {
+		t.Fatalf("GET cover URL: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("got status %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != string(coverData) {
+		t.Errorf("got body %q, want %q", string(body), string(coverData))
+	}
+}

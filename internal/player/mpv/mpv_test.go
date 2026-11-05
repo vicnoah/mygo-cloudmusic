@@ -95,10 +95,28 @@ func TestMPVEngine(t *testing.T) {
 	}
 
 	engine.Seek(1 * time.Second)
+
+	devs := engine.AudioDevices()
+	if len(devs) == 0 {
+		t.Fatal("expected audio devices from engine")
+	}
+	engine.SetAudioDevice("auto")
+	if dev := engine.inst.GetProperty("audio-device"); dev != "auto" {
+		t.Errorf("got audio-device %q, want auto", dev)
+	}
+
+	// Test package-level AudioDevices probe
+	allDevs := AudioDevices()
+	if len(allDevs) == 0 {
+		t.Fatal("expected package-level AudioDevices to return devices")
+	}
 }
 
 // Tests downloading the real libmpv asset from the GitHub release.
 func TestDownloadFromRelease(t *testing.T) {
+	if os.Getenv("LIVE") == "" {
+		t.Skip("skipping network download test unless LIVE is set")
+	}
 	tmp := t.TempDir()
 	SetCacheDir(tmp)
 	defer SetCacheDir("")
@@ -124,5 +142,28 @@ func TestDownloadFromRelease(t *testing.T) {
 	fi, err := os.Stat(target)
 	if err != nil || fi.Size() == 0 {
 		t.Fatalf("downloaded file stat error: %v", err)
+	}
+}
+
+// Tests constructing audio filter strings for graphic equalizer curves.
+func TestBuildEqualizerFilter(t *testing.T) {
+	// 1. Flat bypass should produce empty filter string.
+	flatFilter := BuildEqualizerFilter(0, [10]float64{})
+	if flatFilter != "" {
+		t.Errorf("expected empty filter for flat curve, got %q", flatFilter)
+	}
+
+	// 2. Preamp only.
+	preampFilter := BuildEqualizerFilter(-3.0, [10]float64{})
+	if preampFilter != "volume=volume=-3.0dB" {
+		t.Errorf("expected volume filter, got %q", preampFilter)
+	}
+
+	// 3. Bands with gain.
+	gains := [10]float64{3.0, 0, 0, 0, 0, 0, 0, 0, 0, -2.5}
+	filter := BuildEqualizerFilter(1.5, gains)
+	want := "volume=volume=1.5dB,equalizer=f=31:g=3.0:t=o:w=1.00,equalizer=f=16000:g=-2.5:t=o:w=1.00"
+	if filter != want {
+		t.Errorf("got %q, want %q", filter, want)
 	}
 }

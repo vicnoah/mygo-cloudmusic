@@ -164,6 +164,10 @@ func NewInstance(opts ...map[string]string) (*Instance, error) {
 	inst.SetOption("vo", "null")
 	inst.SetOption("audio-display", "no")
 	inst.SetOption("idle", "yes")
+	inst.SetOption("audio-client-name", "MyGo 云音乐")
+	inst.SetOption("prefetch-playlist", "yes")
+	inst.SetOption("demuxer-max-bytes", "64MiB")
+	inst.SetOption("demuxer-max-back-bytes", "32MiB")
 
 	if len(opts) > 0 {
 		for k, v := range opts[0] {

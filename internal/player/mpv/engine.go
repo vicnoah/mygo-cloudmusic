@@ -1,11 +1,50 @@
 package mpv
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 )
+
+// AudioDevice describes an audio output device enumerated by MPV.
+type AudioDevice struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+var (
+	devsMu       sync.Mutex
+	cachedDevs   []AudioDevice
+	devsCachedAt time.Time
+)
+
+// AudioDevices returns the cached or probed list of audio devices.
+func AudioDevices() []AudioDevice {
+	devsMu.Lock()
+	defer devsMu.Unlock()
+	if time.Since(devsCachedAt) < 5*time.Second && cachedDevs != nil {
+		return cachedDevs
+	}
+	if !Ready() {
+		return cachedDevs
+	}
+	inst, err := NewInstance(map[string]string{"ao": "null"})
+	if err != nil {
+		return cachedDevs
+	}
+	defer inst.Close()
+	raw := inst.GetProperty("audio-device-list")
+	if raw != "" {
+		var list []AudioDevice
+		if err := json.Unmarshal([]byte(raw), &list); err == nil {
+			cachedDevs = list
+			devsCachedAt = time.Now()
+		}
+	}
+	return cachedDevs
+}
 
 // Config holds user choices for MPV audio playback.
 type Config struct {
@@ -17,6 +56,10 @@ type Config struct {
 	AudioDevice string
 	// Gapless enables gapless playback for consecutive tracks.
 	Gapless bool
+	// Equalizer settings
+	EqualizerEnabled bool
+	EqualizerPreamp  float64
+	EqualizerGains   [10]float64
 	// NullAO uses a dummy null audio output (for testing/headless environments).
 	NullAO bool
 }
@@ -30,10 +73,13 @@ type Engine struct {
 
 	onEnd func()
 
-	playing  bool
-	position time.Duration
-	duration time.Duration
-	volume   float64
+	playing   bool
+	position  time.Duration
+	duration  time.Duration
+	volume    float64
+	eqEnabled bool
+	eqPreamp  float64
+	eqGains   [10]float64
 
 	eventDone chan struct{}
 }
@@ -71,8 +117,14 @@ func NewEngine(cfg Config) (*Engine, error) {
 		inst:      inst,
 		cfg:       cfg,
 		volume:    0.8,
+		eqEnabled: cfg.EqualizerEnabled,
+		eqPreamp:  cfg.EqualizerPreamp,
+		eqGains:   cfg.EqualizerGains,
 		eventDone: make(chan struct{}),
 	}
+
+	// Apply initial equalizer filters if enabled
+	e.applyAudioFiltersLocked()
 
 	// Set initial volume
 	inst.SetProperty("volume", fmt.Sprintf("%.1f", e.volume*100))
@@ -246,6 +298,29 @@ func (e *Engine) SetReplayGainPreamp(db float64) {
 	}
 }
 
+// SetEqualizer configures and applies the 10-band graphic equalizer filter.
+func (e *Engine) SetEqualizer(preamp float64, gains [10]float64, enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.eqPreamp = preamp
+	e.eqGains = gains
+	e.eqEnabled = enabled
+	e.applyAudioFiltersLocked()
+}
+
+func (e *Engine) applyAudioFiltersLocked() {
+	if e.inst == nil {
+		return
+	}
+	var filters []string
+	if e.eqEnabled {
+		if f := BuildEqualizerFilter(e.eqPreamp, e.eqGains); f != "" {
+			filters = append(filters, f)
+		}
+	}
+	e.inst.SetProperty("af", strings.Join(filters, ","))
+}
+
 // OnEnd sets the callback to invoke when a track reaches its end.
 func (e *Engine) OnEnd(fn func()) {
 	e.mu.Lock()
@@ -302,6 +377,44 @@ func (e *Engine) RequestLogMessages(minLevel string) {
 	defer e.mu.Unlock()
 	if e.inst != nil {
 		e.inst.RequestLogMessages(minLevel)
+	}
+}
+
+// AudioDevices returns the list of audio output devices reported by MPV.
+func (e *Engine) AudioDevices() []AudioDevice {
+	e.mu.RLock()
+	inst := e.inst
+	e.mu.RUnlock()
+	if inst == nil {
+		return AudioDevices()
+	}
+	devsMu.Lock()
+	defer devsMu.Unlock()
+	if time.Since(devsCachedAt) < 3*time.Second && cachedDevs != nil {
+		return cachedDevs
+	}
+	raw := inst.GetProperty("audio-device-list")
+	if raw != "" {
+		var list []AudioDevice
+		if err := json.Unmarshal([]byte(raw), &list); err == nil {
+			cachedDevs = list
+			devsCachedAt = time.Now()
+			return list
+		}
+	}
+	return cachedDevs
+}
+
+// SetAudioDevice dynamically sets the audio output device (e.g. "auto", or device identifier).
+func (e *Engine) SetAudioDevice(dev string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cfg.AudioDevice = dev
+	if e.inst != nil {
+		if dev == "" {
+			dev = "auto"
+		}
+		e.inst.SetProperty("audio-device", dev)
 	}
 }
 

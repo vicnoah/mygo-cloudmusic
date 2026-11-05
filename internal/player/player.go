@@ -516,6 +516,36 @@ func (p *Player) UsingMPV() bool {
 // SetMPVConfig updates the configuration for MPV playback.
 func (p *Player) SetMPVConfig(cfg mpv.Config) {
 	p.mpvCfg = cfg
+	if p.mpvOut != nil {
+		p.mpvOut.SetEqualizer(cfg.EqualizerPreamp, cfg.EqualizerGains, cfg.EqualizerEnabled)
+		p.mpvOut.SetAudioDevice(cfg.AudioDevice)
+	}
+}
+
+// SetAudioDevice updates the audio output device for MPV.
+func (p *Player) SetAudioDevice(dev string) {
+	p.mpvCfg.AudioDevice = dev
+	if p.mpvOut != nil {
+		p.mpvOut.SetAudioDevice(dev)
+	}
+}
+
+// AudioDevices returns the available MPV audio output devices.
+func (p *Player) AudioDevices() []mpv.AudioDevice {
+	if p.mpvOut != nil {
+		return p.mpvOut.AudioDevices()
+	}
+	return mpv.AudioDevices()
+}
+
+// SetEqualizer updates equalizer configuration and pushes to active MPV engine.
+func (p *Player) SetEqualizer(preamp float64, gains [10]float64, enabled bool) {
+	p.mpvCfg.EqualizerEnabled = enabled
+	p.mpvCfg.EqualizerPreamp = preamp
+	p.mpvCfg.EqualizerGains = gains
+	if p.mpvOut != nil {
+		p.mpvOut.SetEqualizer(preamp, gains, enabled)
+	}
 }
 
 // MPVConfig returns the current MPV configuration.

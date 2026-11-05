@@ -37,6 +37,7 @@ type Proxy struct {
 	lanIP         string
 	port          int
 	sources       map[string]StreamSource
+	covers        map[string]string
 	activeCancels map[string]context.CancelFunc
 	activeBodies  map[string]io.Closer
 	client        *http.Client
@@ -56,6 +57,7 @@ func NewProxy() (*Proxy, error) {
 		lanIP:         lanIP,
 		port:          l.Addr().(*net.TCPAddr).Port,
 		sources:       make(map[string]StreamSource),
+		covers:        make(map[string]string),
 		activeCancels: make(map[string]context.CancelFunc),
 		activeBodies:  make(map[string]io.Closer),
 		client: &http.Client{
@@ -72,6 +74,7 @@ func NewProxy() (*Proxy, error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stream/", p.handleStream)
+	mux.HandleFunc("/cover/", p.handleCover)
 
 	p.server = &http.Server{
 		Handler:      mux,
@@ -134,6 +137,22 @@ func detectLANIP() string {
 		}
 	}
 	return "127.0.0.1"
+}
+
+// RegisterCover associates an album cover with a track ID.
+func (p *Proxy) RegisterCover(trackID string, coverURL string) {
+	if trackID == "" || coverURL == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.covers[trackID] = coverURL
+}
+
+// LANCoverURLFor returns the LAN cover URL reachable by targetURL.
+func (p *Proxy) LANCoverURLFor(trackID, targetURL string) string {
+	ip := p.detectLANIPFor(targetURL)
+	return fmt.Sprintf("http://%s:%d/cover/%s", ip, p.port, trackID)
 }
 
 // Register registers or updates a stream source for a track, returning its DLNA LAN URL.
@@ -408,6 +427,51 @@ func (p *Proxy) Close() error {
 // Port returns the listening port.
 func (p *Proxy) Port() int {
 	return p.port
+}
+
+func (p *Proxy) handleCover(w http.ResponseWriter, r *http.Request) {
+	key := strings.TrimPrefix(r.URL.Path, "/cover/")
+	p.mu.RLock()
+	coverURL := p.covers[key]
+	p.mu.RUnlock()
+
+	if coverURL == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	// 1. If coverURL is a local file on disk, serve it directly.
+	if strings.HasPrefix(coverURL, "/") || (len(coverURL) > 3 && coverURL[1] == ':') {
+		http.ServeFile(w, r, coverURL)
+		return
+	}
+
+	// 2. If coverURL is a remote HTTP URL, proxy it with timeout and caching.
+	req, err := http.NewRequestWithContext(r.Context(), "GET", coverURL, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	} else {
+		w.Header().Set("Content-Type", "image/jpeg")
+	}
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if cl := resp.Header.Get("Content-Length"); cl != "" {
+		w.Header().Set("Content-Length", cl)
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 // LANIP returns the discovered LAN IP.

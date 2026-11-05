@@ -16,10 +16,15 @@ func (a *app) syncMPVSettings() {
 	}
 	a.pl.SetUseMPV(a.settings.UseMPV)
 	a.pl.SetMPVConfig(mpv.Config{
-		Exclusive:  a.settings.MPVExclusive,
-		ReplayGain: a.settings.MPVReplayGain,
-		Gapless:    a.settings.MPVGapless,
+		Exclusive:        a.settings.MPVExclusive,
+		ReplayGain:       a.settings.MPVReplayGain,
+		AudioDevice:      a.settings.MPVAudioDevice,
+		Gapless:          a.settings.MPVGapless,
+		EqualizerEnabled: a.settings.EqualizerEnabled,
+		EqualizerPreamp:  a.settings.EqualizerPreamp,
+		EqualizerGains:   a.settings.EqualizerGains,
 	})
+	a.pl.SetEqualizer(a.settings.EqualizerPreamp, a.settings.EqualizerGains, a.settings.EqualizerEnabled)
 }
 
 func (a *app) mpvReady() bool {
@@ -140,6 +145,57 @@ func (a *app) renderHifiSettings(c *ui.Context, group func(title string, rows fu
 		})
 
 		if s.UseMPV && a.mpvReady() {
+			devices := a.pl.AudioDevices()
+			if len(devices) > 0 {
+				var devLabels []string
+				chosenDevLabel := "系统默认 (自动选择)"
+				devNameToLabel := make(map[string]string)
+				labelToDevName := make(map[string]string)
+				labelCounts := make(map[string]int)
+
+				for _, d := range devices {
+					lbl := d.Description
+					if lbl == "" {
+						lbl = d.Name
+					}
+					if d.Name == "auto" {
+						lbl = "系统默认 (自动选择)"
+					}
+					labelCounts[lbl]++
+				}
+
+				for _, d := range devices {
+					lbl := d.Description
+					if lbl == "" {
+						lbl = d.Name
+					}
+					if d.Name == "auto" {
+						lbl = "系统默认 (自动选择)"
+					} else if labelCounts[lbl] > 1 {
+						lbl = fmt.Sprintf("%s (%s)", lbl, d.Name)
+					}
+					devLabels = append(devLabels, lbl)
+					devNameToLabel[d.Name] = lbl
+					labelToDevName[lbl] = d.Name
+				}
+
+				if curLbl, ok := devNameToLabel[s.MPVAudioDevice]; ok {
+					chosenDevLabel = curLbl
+				} else if s.MPVAudioDevice == "" || s.MPVAudioDevice == "auto" {
+					chosenDevLabel = "系统默认 (自动选择)"
+				}
+
+				row("hifi-mpv-device", "音频输出设备", "独立选择音频路由设备 (如耳机、板载声卡或外置 USB DAC/耳放)", func() {
+					if ui.Select(c.Key("mpv-audio-device"), &chosenDevLabel, devLabels).Label("音频输出设备").Width(240).Changed() {
+						if targetName, ok := labelToDevName[chosenDevLabel]; ok {
+							s.MPVAudioDevice = targetName
+							a.changed()
+							a.syncMPVSettings()
+						}
+					}
+				})
+			}
+
 			row("hifi-mpv-exclusive", "独占音频输出 (Exclusive Mode)", "绕过系统音频混音器，提供无损 Bit-perfect 直通原音输出", func() {
 				if ui.Switch(c.Key("mpv-exclusive"), &s.MPVExclusive).Label("独占音频输出").Changed() {
 					a.changed()
@@ -152,6 +208,51 @@ func (a *app) renderHifiSettings(c *ui.Context, group func(title string, rows fu
 					a.syncMPVSettings()
 				}
 			})
+
+			row("hifi-mpv-eq-info", "图形均衡器 (10-Band EQ)", "基于专业音频滤镜的 10 段图形调音台，已整合至底部播控条右侧，可随时快捷唤出", func() {
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.Icon(c, iconEqualizer).Size(14, 14).TextColor(c.Theme().TextMuted)
+					ui.Text(c, "播控条已启用快捷入口").FontSize(12).TextColor(c.Theme().TextMuted)
+				})
+			})
 		}
+	})
+}
+
+func (a *app) drawEqSlider(c *ui.Context, key string, val *float64, label string) {
+	const knob, track = 16, 4
+	ui.Column(c).AlignItems(ui.Center).Gap(3).Children(func() {
+		ui.Text(c, fmt.Sprintf("%+.0f", *val)).FontSize(10).TextColor(c.Theme().TextMuted).SingleLine()
+		s := ui.SliderBase(c.Key(key), val, -12, 12).Vertical().Size(knob+10, 84).PaddingY(knob / 2).FocusRing(false).Label(label)
+		if s.Changed() {
+			a.settings.EqualizerPreset = "custom"
+			a.changed()
+			a.syncMPVSettings()
+		}
+		v := float32((*val - (-12)) / (12 - (-12)))
+		accent := a.pal.accent
+		dark := c.Theme().Dark
+		trackColor := ui.RGBA(128, 128, 128, 0.25)
+		knobColor := ui.RGBA(255, 255, 255, 0.95)
+		if dark {
+			knobColor = ui.RGBA(220, 220, 220, 0.95)
+		}
+		pressed := s.Pressed()
+		s.Draw(func(p *ui.Painter, r ui.Rect) {
+			top, foot := r.Y+knob/2, r.Y+r.H-knob/2
+			x := r.X + (r.W-track)/2
+			y := foot - (foot-top)*v
+			p.Fill(ui.Rect{X: x, Y: top - track/2, W: track, H: foot - top + track}, trackColor, track/2)
+			p.Fill(ui.Rect{X: x, Y: y, W: track, H: foot - y + track/2}, accent, track/2)
+			k := ui.Rect{X: r.X + (r.W-knob)/2, Y: y - knob/2, W: knob, H: knob}
+			p.Shadow(k, knob/2, 0, 1, 3, 0, ui.RGBA(0, 0, 0, 0.2))
+			fill := knobColor
+			if pressed {
+				fill = fill.Mix(ui.RGB(0, 0, 0), 0.1)
+			}
+			p.Fill(k, fill, knob/2)
+			p.Stroke(k, ui.RGBA(0, 0, 0, 0.1), knob/2, 0.5)
+		})
+		ui.Text(c, label).FontSize(11).SingleLine()
 	})
 }
