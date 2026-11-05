@@ -136,3 +136,64 @@ func TestActiveDeviceNeverDisappearsOnRefresh(t *testing.T) {
 		t.Error("expected active device to remain selected")
 	}
 }
+
+// Tests smooth local progression of playback position in Status() without network polling.
+func TestSmoothStatusProgression(t *testing.T) {
+	ctrl, err := NewController(nil)
+	if err != nil {
+		t.Fatalf("NewController: %v", err)
+	}
+	defer ctrl.Close()
+
+	ctrl.mu.Lock()
+	ctrl.playing = true
+	ctrl.duration = 180 * time.Second
+	ctrl.lastSyncPos = 10 * time.Second
+	ctrl.lastSyncTime = time.Now().Add(-500 * time.Millisecond)
+	ctrl.mu.Unlock()
+
+	playing, pos, dur := ctrl.Status()
+	if !playing {
+		t.Error("expected playing to be true")
+	}
+	if dur != 180*time.Second {
+		t.Errorf("got dur %v, want 180s", dur)
+	}
+	if pos < 10400*time.Millisecond || pos > 11500*time.Millisecond {
+		t.Errorf("got pos %v, want ~10.5s", pos)
+	}
+}
+
+// Tests debounced volume updates and TrackMeta attributes.
+func TestVolumeAndTrackMeta(t *testing.T) {
+	ctrl, err := NewController(nil)
+	if err != nil {
+		t.Fatalf("NewController: %v", err)
+	}
+	defer ctrl.Close()
+
+	// Rapid volume updates
+	for v := 0.1; v <= 0.8; v += 0.1 {
+		_ = ctrl.SetVolume(context.Background(), v)
+	}
+	if ctrl.volume < 0.79 || ctrl.volume > 0.81 {
+		t.Errorf("got volume %v, want 0.8", ctrl.volume)
+	}
+
+	meta := TrackMeta{
+		ID:              "12345",
+		Title:           "Hi-Res Track",
+		Artist:          "Artist",
+		Album:           "Album",
+		Format:          "flac",
+		Duration:        240 * time.Second,
+		Size:            50000000,
+		Bitrate:         208333,
+		SampleFrequency: 96000,
+		BitsPerSample:   24,
+		Channels:        2,
+	}
+	if meta.SampleFrequency != 96000 || meta.BitsPerSample != 24 || meta.Channels != 2 {
+		t.Errorf("unexpected meta values: %+v", meta)
+	}
+}

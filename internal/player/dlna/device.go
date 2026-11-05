@@ -358,6 +358,14 @@ func (d *Device) SetMedia(ctx context.Context, item *avtransport.MediaItem) erro
 	return nil
 }
 
+// SetNextMedia stages the upcoming track on devices that support UPnP gapless queuing.
+func (d *Device) SetNextMedia(ctx context.Context, item *avtransport.MediaItem) error {
+	if d.av == nil {
+		return errors.New("dlna: av transport client not available")
+	}
+	return d.av.SetNextAVTransportMedia(ctx, item)
+}
+
 // PositionInfo fetches current playback position and duration.
 func (d *Device) PositionInfo(ctx context.Context) (pos, dur time.Duration, err error) {
 	if d.av == nil {

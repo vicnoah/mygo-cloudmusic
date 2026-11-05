@@ -898,19 +898,34 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 				if p.Cache != nil {
 					localFile = p.Cache.FilePath(t.ID, level)
 				}
+				sampleRate := 44100
+				bitsPerSample := 16
+				if info.Level == "hires" {
+					sampleRate = 96000
+					bitsPerSample = 24
+				}
+				bitrate := 0
+				durSec := int64(t.Length().Seconds())
+				if durSec > 0 && info.Size > 0 {
+					bitrate = int(info.Size / durSec)
+				}
 				trackID := fmt.Sprintf("%d", t.ID)
 				meta := dlna.TrackMeta{
-					ID:        trackID,
-					Title:     t.Name,
-					Artist:    t.ArtistNames(),
-					Album:     t.Album.Name,
-					CoverURL:  netease.Sized(t.Album.PicURL, 600),
-					StreamURL: info.URL,
-					LocalFile: localFile,
-					Format:    info.Type,
-					Duration:  t.Length(),
-					Size:      info.Size,
-					Headers:   headers,
+					ID:              trackID,
+					Title:           t.Name,
+					Artist:          t.ArtistNames(),
+					Album:           t.Album.Name,
+					CoverURL:        netease.Sized(t.Album.PicURL, 600),
+					StreamURL:       info.URL,
+					LocalFile:       localFile,
+					Format:          info.Type,
+					Duration:        t.Length(),
+					Size:            info.Size,
+					Bitrate:         bitrate,
+					SampleFrequency: sampleRate,
+					BitsPerSample:   bitsPerSample,
+					Channels:        2,
+					Headers:         headers,
 				}
 				if err := p.dlnaCtrl.PlayTrack(context.Background(), meta, p.pending); err != nil {
 					p.err = fmt.Sprintf("无线投送失败: %v", err)
@@ -921,6 +936,7 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 				p.pending = 0
 				p.markStarted()
 				p.sync()
+				p.prefetchNextDLNA(at, gen)
 				return
 			}
 
@@ -1099,6 +1115,74 @@ func (p *Player) prefetchNextMPV(at, gen int) {
 				_ = p.mpvOut.Append(playURL)
 			}
 		})
+	}()
+}
+
+// prefetchNextDLNA resolves and stages the next track to the DLNA renderer for gapless playback.
+func (p *Player) prefetchNextDLNA(at, gen int) {
+	if !p.IsCasting() || p.repeat == RepeatOne || p.dlnaCtrl == nil {
+		return
+	}
+	nextAt := at + 1
+	if nextAt >= len(p.order) {
+		if p.repeat == RepeatAll {
+			nextAt = 0
+		} else {
+			return
+		}
+	}
+	if nextAt >= len(p.order) {
+		return
+	}
+	nextTrack := p.queue[p.order[nextAt]]
+	go func() {
+		level := "exhigh"
+		if p.Quality != nil {
+			level = p.Quality()
+		}
+		info, _, err := p.open(nextTrack, level)
+		if err != nil || info == nil || info.URL == "" {
+			return
+		}
+		localFile := ""
+		if p.Cache != nil {
+			localFile = p.Cache.FilePath(nextTrack.ID, level)
+		}
+		headers := http.Header{}
+		if info.Header != nil {
+			headers = info.Header()
+		}
+		sampleRate := 44100
+		bitsPerSample := 16
+		if info.Level == "hires" {
+			sampleRate = 96000
+			bitsPerSample = 24
+		}
+		bitrate := 0
+		durSec := int64(nextTrack.Length().Seconds())
+		if durSec > 0 && info.Size > 0 {
+			bitrate = int(info.Size / durSec)
+		}
+		meta := dlna.TrackMeta{
+			ID:              fmt.Sprintf("%d", nextTrack.ID),
+			Title:           nextTrack.Name,
+			Artist:          nextTrack.ArtistNames(),
+			Album:           nextTrack.Album.Name,
+			CoverURL:        netease.Sized(nextTrack.Album.PicURL, 600),
+			StreamURL:       info.URL,
+			LocalFile:       localFile,
+			Format:          info.Type,
+			Duration:        nextTrack.Length(),
+			Size:            info.Size,
+			Bitrate:         bitrate,
+			SampleFrequency: sampleRate,
+			BitsPerSample:   bitsPerSample,
+			Channels:        2,
+			Headers:         headers,
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = p.dlnaCtrl.SetNextTrack(ctx, meta)
 	}()
 }
 
