@@ -294,6 +294,22 @@ func TestSpatialProcessingFor(t *testing.T) {
 	}
 }
 
+func TestExclusiveForSpatialStreams(t *testing.T) {
+	for _, level := range []string{"sky", "jyeffect", "dolby", "vivid"} {
+		if exclusiveFor(true, level) {
+			t.Errorf("%s must use the CoreAudio mixer for system volume", level)
+		}
+	}
+	for _, level := range []string{"standard", "lossless", "hires", "jymaster"} {
+		if !exclusiveFor(true, level) {
+			t.Errorf("%s should keep exclusive mode", level)
+		}
+	}
+	if exclusiveFor(false, "lossless") {
+		t.Error("exclusive preference was off")
+	}
+}
+
 func TestCacheKeepsVividWAV(t *testing.T) {
 	dir := t.TempDir()
 	c := NewCache(dir, 400)

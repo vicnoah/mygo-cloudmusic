@@ -1007,11 +1007,13 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 					// jyeffect is already a spatialised stereo master;
 					// applying crossfeed/HRTF again would colour it twice.
 					engine.SetSpatialOptions(p.mpvCfg.SpatialMode, p.mpvCfg.HrtfProfile, spatialProcessingFor(info.Level))
-					// E-AC-3 must be decoded to PCM on ordinary CoreAudio
-					// outputs; hog mode can fail before the decoder gets a
-					// usable compressed substream. Keep exclusive mode for
-					// PCM tracks, but not for the Dolby/E-AC-3 stream itself.
-					engine.SetExclusive(p.mpvCfg.Exclusive && info.Level != "dolby")
+					// Spatial streams (Vivid 7.1.4, sky 5.1, Dolby/E-AC-3)
+					// must go through the normal CoreAudio mixer: hog mode
+					// bypasses the system volume and can make macOS volume
+					// keys / the menu slider appear dead. It can also fail
+					// before E-AC-3 is decoded. Keep exclusive mode for
+					// ordinary stereo PCM only.
+					engine.SetExclusive(exclusiveFor(p.mpvCfg.Exclusive, info.Level))
 					if err := engine.Play(playURL, nil, p.pending); err == nil {
 						p.fade.attach(mpvVolumeOutput{p: p, e: p.mpvOut}, fadeLevel)
 						p.applyGain()
@@ -1160,6 +1162,13 @@ func (p *Player) prefetchNextMPV(at, gen int) {
 // must not be processed twice; ordinary stereo has nothing to render.
 func spatialProcessingFor(level string) bool {
 	return netease.Spatial(level) && level != "jyeffect"
+}
+
+// exclusiveFor keeps hog mode for ordinary stereo PCM. Spatial streams
+// need the CoreAudio mixer so macOS system volume keys and the menu slider
+// keep working; hog mode also makes E-AC-3 initialization less reliable.
+func exclusiveFor(pref bool, level string) bool {
+	return pref && !netease.Spatial(level)
 }
 
 // effectiveLevel lowers a level the current output cannot play. Audio Vivid

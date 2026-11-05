@@ -290,7 +290,7 @@ func (a *app) renderHifiSettings(c *ui.Context, group func(title string, rows fu
 					a.syncMPVSettings()
 				}
 			})
-			row("hifi-mpv-exclusive", "独占音频输出 (Exclusive Mode)", "绕过系统音频混音器，提供无损 Bit-perfect 直通原音输出", func() {
+			row("hifi-mpv-exclusive", "独占音频输出 (Exclusive Mode)", "仅立体声 PCM 曲目使用；空间音频与杜比会自动走系统混音，保证 macOS 音量键和音量滑块有效", func() {
 				if ui.Switch(c.Key("mpv-exclusive"), &s.MPVExclusive).Label("独占音频输出").Changed() {
 					a.changed()
 					a.syncMPVSettings()
