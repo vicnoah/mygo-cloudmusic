@@ -379,7 +379,7 @@ func (a *app) versionDesc() string {
 		a.devClicks = 0
 	}
 	if a.settings.DeveloperMode {
-		return "开发者模式已开启（已解锁网易云与 QQ 音乐）"
+		return "开发者模式已开启"
 	}
 	return ""
 }

@@ -202,6 +202,9 @@ func TestDeveloperModeToggle(t *testing.T) {
 	if a.toast != "已开启开发者模式" {
 		t.Fatalf("unexpected toast: %q", a.toast)
 	}
+	if a.versionDesc() != "开发者模式已开启" {
+		t.Fatalf("unexpected desc after enabling: %q", a.versionDesc())
+	}
 
 	// 5 more clicks to disable
 	a.toast = ""
