@@ -47,6 +47,10 @@ func TestMPVEngine(t *testing.T) {
 	}
 	defer engine.Close()
 
+	if got := engine.inst.GetProperty("audio-normalize-downmix"); got != "yes" {
+		t.Fatalf("audio-normalize-downmix = %q, want yes", got)
+	}
+
 	// Ensure headless-friendly options in test
 	engine.inst.SetOption("ao", "null")
 

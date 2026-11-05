@@ -3,6 +3,7 @@ package player
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -176,6 +177,65 @@ func (c *Cache) keep(id int64, st *netease.Stream, part string, n int64) (string
 	return path, true
 }
 
+// VividPath returns a decoded Audio Vivid WAV kept for id, or "".
+func (c *Cache) VividPath(id int64) string {
+	if c == nil {
+		return ""
+	}
+	p := filepath.Join(c.dir, fmt.Sprintf("%d-vivid.wav", id))
+	if fi, err := os.Stat(p); err == nil && fi.Size() > 0 {
+		now := time.Now()
+		os.Chtimes(p, now, now)
+		return p
+	}
+	return ""
+}
+
+// keepVivid moves a decoded Audio Vivid WAV into the cache when it fits.
+// Decoding is CPU-heavy, so keeping the result makes replay instant.
+func (c *Cache) keepVivid(id int64, path string) (string, bool) {
+	if c == nil {
+		return path, false
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return path, false
+	}
+	c.mu.Lock()
+	limit := c.limit
+	c.mu.Unlock()
+	if limit <= 0 || fi.Size() > limit/2 {
+		return path, false
+	}
+	if err := os.MkdirAll(c.dir, 0o700); err != nil {
+		return path, false
+	}
+	dst := filepath.Join(c.dir, fmt.Sprintf("%d-vivid.wav", id))
+	if err := os.Rename(path, dst); err != nil {
+		in, err := os.Open(path)
+		if err != nil {
+			return path, false
+		}
+		out, err := os.Create(dst)
+		if err != nil {
+			in.Close()
+			return path, false
+		}
+		_, err = io.Copy(out, in)
+		in.Close()
+		if cerr := out.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			os.Remove(dst)
+			return path, false
+		}
+		os.Remove(path)
+	}
+	c.prune(dst)
+	return dst, true
+}
+
 // Size returns how many bytes the songs kept take.
 func (c *Cache) Size() int64 {
 	var n int64
@@ -203,7 +263,7 @@ func (c *Cache) songs() []cachedSong {
 	var out []cachedSong
 	for _, e := range entries {
 		switch filepath.Ext(e.Name()) {
-		case ".mp3", ".flac", ".mp4", ".m4a":
+		case ".mp3", ".flac", ".mp4", ".m4a", ".wav":
 		default:
 			continue
 		}

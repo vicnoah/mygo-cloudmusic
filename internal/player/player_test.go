@@ -293,3 +293,23 @@ func TestSpatialProcessingFor(t *testing.T) {
 		}
 	}
 }
+
+func TestCacheKeepsVividWAV(t *testing.T) {
+	dir := t.TempDir()
+	c := NewCache(dir, 400)
+	path := filepath.Join(dir, "decoded.wav")
+	if err := os.WriteFile(path, make([]byte, 100), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := c.keepVivid(7, path)
+	if !ok || got != c.VividPath(7) {
+		t.Fatalf("keepVivid = %q, %v; VividPath = %q", got, ok, c.VividPath(7))
+	}
+	if n := c.Size(); n != 100 {
+		t.Fatalf("size = %d, want 100", n)
+	}
+	c.Clear()
+	if p := c.VividPath(7); p != "" {
+		t.Fatalf("VividPath after Clear = %q", p)
+	}
+}

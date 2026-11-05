@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -99,6 +100,7 @@ type Player struct {
 	dlnaCtrl *dlna.Controller
 	// vividDirs are the temporary MP4/WAV directories of Audio Vivid
 	// tracks that played, removed when the next track loads.
+	vividMu   sync.Mutex
 	vividDirs []string
 
 	// pending holds a seek asked for while the track loads.
@@ -808,10 +810,13 @@ func (p *Player) stop() {
 
 // clearVividDirs drops the temporary files made to decode Audio Vivid.
 func (p *Player) clearVividDirs() {
-	for _, dir := range p.vividDirs {
+	p.vividMu.Lock()
+	dirs := p.vividDirs
+	p.vividDirs = nil
+	p.vividMu.Unlock()
+	for _, dir := range dirs {
 		_ = os.RemoveAll(dir)
 	}
-	p.vividDirs = nil
 }
 
 // load plays the track at order[at], skipping those that cannot play.
@@ -1099,12 +1104,6 @@ func (p *Player) prefetchNextMPV(at, gen int) {
 		if p.Quality != nil {
 			level = p.Quality()
 		}
-		// Audio Vivid decoding is slow and needs a whole file: do not
-		// decode the next song in the background, let its own load show the
-		// progress instead.
-		if p.effectiveLevel(level) == "vivid" {
-			return
-		}
 		info, _, err := p.open(nextTrack, level)
 		if err != nil || info == nil || (info.URL == "" && info.PlayPath == "") {
 			return
@@ -1235,11 +1234,19 @@ func (p *Player) openVivid(t netease.Track) (*netease.Stream, stream, error) {
 // into a WAV MPV can play. The directory is removed when the next track
 // loads.
 func (p *Player) prepareVivid(t netease.Track, info *netease.Stream) error {
+	if p.Cache != nil {
+		if cached := p.Cache.VividPath(t.ID); cached != "" {
+			info.PlayPath = cached
+			return nil
+		}
+	}
 	dir, err := os.MkdirTemp("", fmt.Sprintf("mygo-vivid-%d-", t.ID))
 	if err != nil {
 		return err
 	}
+	p.vividMu.Lock()
 	p.vividDirs = append(p.vividDirs, dir)
+	p.vividMu.Unlock()
 	ext := info.Type
 	if ext != "mp4" && ext != "m4a" {
 		ext = "mp4"
@@ -1253,6 +1260,12 @@ func (p *Player) prepareVivid(t netease.Track, info *netease.Stream) error {
 	defer cancel()
 	if err := av3a.Decode(ctx, src, out); err != nil {
 		return err
+	}
+	if p.Cache != nil {
+		if cached, ok := p.Cache.keepVivid(t.ID, out); ok {
+			info.PlayPath = cached
+			return nil
+		}
 	}
 	info.PlayPath = out
 	return nil

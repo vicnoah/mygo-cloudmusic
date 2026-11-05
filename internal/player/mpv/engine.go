@@ -135,6 +135,10 @@ func NewEngine(cfg Config) (*Engine, error) {
 	if cfg.AudioSpdif != "" {
 		inst.SetProperty("audio-spdif", cfg.AudioSpdif)
 	}
+	// Always normalize when MPV folds the 7.1.4 Vivid PCM into stereo or
+	// headphones. The decoded stream often peaks at 0 dBFS; without this
+	// MPV's default downmix clips and produces audible crackle.
+	inst.SetProperty("audio-normalize-downmix", "yes")
 
 	e := &Engine{
 		inst:           inst,

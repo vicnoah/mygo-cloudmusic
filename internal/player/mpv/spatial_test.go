@@ -20,6 +20,9 @@ func TestBuildSpatialFilter(t *testing.T) {
 		if !strings.Contains(f, "crossfeed") {
 			t.Fatalf("headphone filter = %q, want crossfeed", f)
 		}
+		if !strings.Contains(f, "volume=0.65") {
+			t.Fatalf("headphone filter = %q, want output gain", f)
+		}
 	}
 	if balanced == wide {
 		t.Fatal("balanced and wide filters should differ")

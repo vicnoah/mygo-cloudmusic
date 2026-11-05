@@ -10,8 +10,8 @@ func BuildSpatialFilter(mode, profile string) string {
 	}
 	switch profile {
 	case "wide":
-		return "lavfi=[crossfeed=strength=0.35:range=0.85:slope=0.4]"
+		return "lavfi=[crossfeed=strength=0.35:range=0.85:slope=0.4,volume=0.65]"
 	default:
-		return "lavfi=[crossfeed=strength=0.2:range=0.5:slope=0.5]"
+		return "lavfi=[crossfeed=strength=0.2:range=0.5:slope=0.5,volume=0.65]"
 	}
 }
