@@ -178,34 +178,25 @@ func NewInstance(opts ...map[string]string) (*Instance, error) {
 
 	inst := &Instance{handle: handle}
 
-	// Default options: audio only, no video window, stay idle
-	inst.SetOption("vo", "null")
-	inst.SetOption("audio-display", "no")
+	// Default options: audio only, no video decoding, stay idle
+	inst.SetOption("video", "no")
 	inst.SetOption("idle", "yes")
 	inst.SetOption("audio-client-name", "肥牛音乐")
 	inst.SetOption("prefetch-playlist", "yes")
 
-	// High resilience audio buffering & demuxer options (anti-stutter)
-	inst.SetOption("audio-buffer", "1.0")
+	// Demuxer buffering for network resilience
 	inst.SetOption("demuxer-thread", "yes")
 	inst.SetOption("demuxer-max-bytes", "64MiB")
 	inst.SetOption("demuxer-max-back-bytes", "32MiB")
 	inst.SetOption("cache-pause-initial", "no")
 	inst.SetOption("cache-pause-wait", "1")
-	inst.SetOption("audio-stream-silence", "yes")
-	inst.SetOption("audio-pitch-correction", "no")
 	inst.SetOption("network-timeout", "30")
 
-	// Platform-specific audio driver and scheduling optimizations
+	// Platform-specific scheduling and audio driver
 	switch runtime.GOOS {
 	case "windows":
 		// Elevate thread priority to defend against foreground window CPU starvation
 		inst.SetOption("priority", "high")
-		// Provide safety buffer for WASAPI exclusive mode (100ms)
-		inst.SetOption("ao-wasapi-exclusive-buffer", "100000")
-	case "darwin":
-		// Allow 200ms grace period on sample rate changes for CoreAudio
-		inst.SetOption("audio-wait-open", "0.2")
 	case "linux":
 		// Prefer modern PipeWire, fallback to PulseAudio and ALSA
 		inst.SetOption("ao", "pipewire,pulse,alsa")

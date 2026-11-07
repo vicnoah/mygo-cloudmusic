@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"netease-music-mygo/internal/eq"
 )
 
 // Tests metadata and path resolution for libmpv assets across platforms.
@@ -111,10 +113,7 @@ func TestMPVEngine(t *testing.T) {
 		t.Fatal("expected package-level AudioDevices to return devices")
 	}
 
-	// Verify resilience & buffering options
-	if buf := engine.inst.GetProperty("audio-buffer"); buf != "1" && buf != "1.0" && buf != "1.000000" {
-		t.Errorf("got audio-buffer %q, want ~1.0", buf)
-	}
+	// Verify the demuxer cache is configured.
 	if maxBytes := engine.inst.GetProperty("demuxer-max-bytes"); maxBytes == "" || maxBytes == "0" {
 		t.Errorf("expected demuxer-max-bytes to be non-empty, got %q", maxBytes)
 	}
@@ -170,22 +169,30 @@ func TestDownloadFromRelease(t *testing.T) {
 // Tests constructing audio filter strings for graphic equalizer curves.
 func TestBuildEqualizerFilter(t *testing.T) {
 	// 1. Flat bypass should produce empty filter string.
-	flatFilter := BuildEqualizerFilter(0, [10]float64{})
+	flatFilter := eq.BuildEqualizerFilter(0, []float64{}, eq.TypeISO10)
 	if flatFilter != "" {
 		t.Errorf("expected empty filter for flat curve, got %q", flatFilter)
 	}
 
 	// 2. Preamp only.
-	preampFilter := BuildEqualizerFilter(-3.0, [10]float64{})
+	preampFilter := eq.BuildEqualizerFilter(-3.0, []float64{}, eq.TypeISO10)
 	if preampFilter != "volume=volume=-3.0dB" {
 		t.Errorf("expected volume filter, got %q", preampFilter)
 	}
 
 	// 3. Bands with gain.
-	gains := [10]float64{3.0, 0, 0, 0, 0, 0, 0, 0, 0, -2.5}
-	filter := BuildEqualizerFilter(1.5, gains)
-	want := "volume=volume=1.5dB,equalizer=f=31:g=3.0:t=o:w=1.00,equalizer=f=16000:g=-2.5:t=o:w=1.00"
+	gains := []float64{3.0, 0, 0, 0, 0, 0, 0, 0, 0, -2.5}
+	filter := eq.BuildEqualizerFilter(1.5, gains, eq.TypeISO10)
+	want := "volume=volume=1.5dB,equalizer=f=31:g=3.00:t=o:w=1.00,equalizer=f=16000:g=-2.50:t=o:w=1.00"
 	if filter != want {
 		t.Errorf("got %q, want %q", filter, want)
+	}
+
+	// 4. The 15-band curve uses thirds of an octave.
+	bands := make([]float64, eq.BandCount(eq.TypeISO15))
+	bands[0] = -1
+	got := eq.BuildEqualizerFilter(0, bands, eq.TypeISO15)
+	if want := "equalizer=f=25:g=-1.00:t=o:w=0.67"; got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

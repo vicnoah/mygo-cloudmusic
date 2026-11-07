@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	eqpkg "netease-music-mygo/internal/eq"
 )
 
 // AudioDevice describes an audio output device enumerated by MPV.
@@ -58,8 +60,9 @@ type Config struct {
 	Gapless bool
 	// Equalizer settings
 	EqualizerEnabled bool
+	EqualizerType    string
 	EqualizerPreamp  float64
-	EqualizerGains   [10]float64
+	EqualizerBands   []float64
 	// NullAO uses a dummy null audio output (for testing/headless environments).
 	NullAO bool
 }
@@ -79,17 +82,26 @@ type Engine struct {
 	duration  time.Duration
 	volume    float64
 	eqEnabled bool
+	eqType    string
 	eqPreamp  float64
-	eqGains   [10]float64
+	eqBands   []float64
 
 	eventDone chan struct{}
 }
 
 // NewEngine creates and configures a high-quality audio playback engine.
 func NewEngine(cfg Config) (*Engine, error) {
+	// weak keeps files of the same format gapless, and reopens the device
+	// when the format changes, rather than resampling them to the first
+	// file's rate as yes does. Off has to be said: MPV defaults to weak.
+	gapless := "no"
+	if cfg.Gapless {
+		gapless = "weak"
+	}
 	opts := map[string]string{
 		"stream-lavf-o":  "seekable=1,reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
 		"force-seekable": "yes",
+		"gapless-audio":  gapless,
 	}
 	if cfg.NullAO {
 		opts["ao"] = "null"
@@ -106,15 +118,9 @@ func NewEngine(cfg Config) (*Engine, error) {
 	}
 
 	// Apply audiophile options
-	if cfg.Exclusive {
-		inst.SetProperty("audio-exclusive", "yes")
-	}
 	if cfg.ReplayGain != "" && cfg.ReplayGain != "no" {
 		inst.SetProperty("replaygain", cfg.ReplayGain)
 		inst.SetProperty("replaygain-clip", "yes")
-	}
-	if cfg.Gapless {
-		inst.SetProperty("gapless-audio", "yes")
 	}
 	if cfg.AudioDevice != "" {
 		inst.SetProperty("audio-device", cfg.AudioDevice)
@@ -125,8 +131,9 @@ func NewEngine(cfg Config) (*Engine, error) {
 		cfg:       cfg,
 		volume:    0.8,
 		eqEnabled: cfg.EqualizerEnabled,
+		eqType:    cfg.EqualizerType,
 		eqPreamp:  cfg.EqualizerPreamp,
-		eqGains:   cfg.EqualizerGains,
+		eqBands:   cfg.EqualizerBands,
 		eventDone: make(chan struct{}),
 	}
 
@@ -184,6 +191,11 @@ func (e *Engine) Pause() {
 	defer e.mu.Unlock()
 	if e.inst != nil {
 		e.inst.SetProperty("pause", "yes")
+		// Exclusive holds the audio device. Let another app have it while
+		// paused; Resume takes it back.
+		if e.cfg.Exclusive {
+			e.inst.SetProperty("audio-exclusive", "no")
+		}
 		e.playing = false
 	}
 }
@@ -193,6 +205,9 @@ func (e *Engine) Resume() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.inst != nil {
+		if e.cfg.Exclusive {
+			e.inst.SetProperty("audio-exclusive", "yes")
+		}
 		e.inst.SetProperty("pause", "no")
 		e.playing = true
 	}
@@ -308,13 +323,14 @@ func (e *Engine) SetReplayGainPreamp(db float64) {
 	}
 }
 
-// SetEqualizer configures and applies the 10-band graphic equalizer filter.
-func (e *Engine) SetEqualizer(preamp float64, gains [10]float64, enabled bool) {
+// SetEqualizer configures and applies the graphic equalizer filter.
+func (e *Engine) SetEqualizer(preamp float64, bands []float64, enabled bool, typ string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.eqPreamp = preamp
-	e.eqGains = gains
+	e.eqBands = bands
 	e.eqEnabled = enabled
+	e.eqType = typ
 	e.applyAudioFiltersLocked()
 }
 
@@ -324,7 +340,7 @@ func (e *Engine) applyAudioFiltersLocked() {
 	}
 	var filters []string
 	if e.eqEnabled {
-		if f := BuildEqualizerFilter(e.eqPreamp, e.eqGains); f != "" {
+		if f := eqpkg.BuildEqualizerFilter(e.eqPreamp, e.eqBands, e.eqType); f != "" {
 			filters = append(filters, f)
 		}
 	}

@@ -14,17 +14,29 @@ func (a *app) syncMPVSettings() {
 	if a.pl == nil {
 		return
 	}
+	a.settings.EQ.Normalize()
 	a.pl.SetUseMPV(a.settings.UseMPV)
+	if !a.eqAvailable() {
+		a.eqOpen = false
+		a.eqUI.saveOpen = false
+		a.eqUI.deleteOpen = false
+		a.eqUI.autoeqOpen = false
+	}
 	a.pl.SetMPVConfig(mpv.Config{
 		Exclusive:        a.settings.MPVExclusive,
 		ReplayGain:       a.settings.MPVReplayGain,
 		AudioDevice:      a.settings.MPVAudioDevice,
 		Gapless:          a.settings.MPVGapless,
-		EqualizerEnabled: a.settings.EqualizerEnabled,
-		EqualizerPreamp:  a.settings.EqualizerPreamp,
-		EqualizerGains:   a.settings.EqualizerGains,
+		EqualizerEnabled: a.settings.EQ.Enabled,
+		EqualizerType:    a.settings.EQ.Type,
+		EqualizerPreamp:  a.settings.EQ.Preamp,
+		EqualizerBands:   a.settings.EQ.Bands,
 	})
-	a.pl.SetEqualizer(a.settings.EqualizerPreamp, a.settings.EqualizerGains, a.settings.EqualizerEnabled)
+}
+
+// eqAvailable reports whether the equalizer has an MPV engine to run in.
+func (a *app) eqAvailable() bool {
+	return a.pl != nil && a.pl.UsingMPV()
 }
 
 func (a *app) mpvReady() bool {
@@ -209,7 +221,7 @@ func (a *app) renderHifiSettings(c *ui.Context, group func(title string, rows fu
 				}
 			})
 
-			row("hifi-mpv-eq-info", "图形均衡器 (10-Band EQ)", "基于专业音频滤镜的 10 段图形调音台，已整合至底部播控条右侧，可随时快捷唤出", func() {
+			row("hifi-mpv-eq-info", "图形均衡器 (ISO 10/15 段)", "基于专业音频滤镜的图形调音台，已整合至底部播控条右侧，可随时快捷唤出", func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 					ui.Icon(c, iconEqualizer).Size(14, 14).TextColor(c.Theme().TextMuted)
 					ui.Text(c, "播控条已启用快捷入口").FontSize(12).TextColor(c.Theme().TextMuted)
@@ -223,10 +235,11 @@ func (a *app) drawEqSlider(c *ui.Context, key string, val *float64, label string
 	const knob, track = 16, 4
 	ui.Column(c).AlignItems(ui.Center).Gap(3).Children(func() {
 		ui.Text(c, fmt.Sprintf("%+.0f", *val)).FontSize(10).TextColor(c.Theme().TextMuted).SingleLine()
-		s := ui.SliderBase(c.Key(key), val, -12, 12).Vertical().Size(knob+10, 84).PaddingY(knob / 2).FocusRing(false).Label(label)
+		s := ui.SliderBase(c.Key(key), val, -12, 12).Vertical().Size(knob+8, 84).PaddingY(knob / 2).FocusRing(false).Label(label)
 		if s.Changed() {
-			a.settings.EqualizerPreset = "custom"
-			a.changed()
+			a.settings.EQ.Preset = ""
+			a.settings.EQ.AutoEQPath, a.settings.EQ.AutoEQName = "", ""
+			a.eqChanged()
 			a.syncMPVSettings()
 		}
 		v := float32((*val - (-12)) / (12 - (-12)))

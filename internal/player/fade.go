@@ -107,7 +107,7 @@ func (f *fader) fade(to float64, d time.Duration, done func()) {
 	f.from, f.to, f.start, f.dur = from, to, now, d
 	f.mu.Unlock()
 	go func() {
-		tick := time.NewTicker(8 * time.Millisecond)
+		tick := time.NewTicker(2 * time.Millisecond)
 		defer tick.Stop()
 		for {
 			f.mu.Lock()

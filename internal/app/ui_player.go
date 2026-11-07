@@ -445,7 +445,7 @@ func (a *app) playerBar(c *ui.Context) {
 			if iconButton(c.Key("queue"), iconQueue, 16, p.muted, "播放队列").Clicked() && tr != nil {
 				a.nowPlaying, a.npPane = true, paneQueue
 			}
-			if a.settings.UseMPV && a.mpvReady() {
+			if a.eqAvailable() {
 				a.eqButton(c, p)
 			}
 			a.castButton(c, p)

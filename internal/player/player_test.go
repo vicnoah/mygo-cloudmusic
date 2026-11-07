@@ -169,10 +169,10 @@ func TestNormGain(t *testing.T) {
 	}{
 		{nil, 1},
 		{&netease.Stream{}, 1},
-		{&netease.Stream{Gain: -6.6, Peak: 1}, math.Pow(10, -2.6/20)},
+		{&netease.Stream{Gain: -6.6, Peak: 1}, math.Pow(10, -6.6/20)},
 		// Quiet, it is lifted, but not past its peak.
 		{&netease.Stream{Gain: 3, Peak: 0.8}, 1.25},
-		{&netease.Stream{Gain: -4, Peak: 0}, 1},
+		{&netease.Stream{Gain: -4, Peak: 0}, math.Pow(10, -4.0/20)},
 	} {
 		if g := normGain(c.st); math.Abs(g-c.want) > 1e-9 {
 			t.Errorf("%+v: %v, want %v", c.st, g, c.want)

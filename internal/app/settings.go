@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/egoist/mygo"
+	"netease-music-mygo/internal/eq"
 	"netease-music-mygo/internal/platform"
 )
 
@@ -99,29 +100,25 @@ type settings struct {
 	// MPVAudioDevice specifies the selected output device name ("" or "auto" for system default).
 	MPVAudioDevice string `json:"mpvAudioDevice,omitempty"`
 
-	// EqualizerEnabled toggles graphic EQ processing in MPV.
-	EqualizerEnabled bool `json:"equalizerEnabled,omitempty"`
-	// EqualizerPreset is the active preset ID ("flat", "vocal", "bass", etc.).
-	EqualizerPreset string `json:"equalizerPreset,omitempty"`
-	// EqualizerPreamp is the preamp gain in dB (-12 to +12).
-	EqualizerPreamp float64 `json:"equalizerPreamp,omitempty"`
-	// EqualizerGains stores the 10-band gains in dB.
-	EqualizerGains [10]float64 `json:"equalizerGains,omitempty"`
+	// EQ is the graphic equalizer, under a key of its own: settings files
+	// from before the 15-band equalizer keep their old equalizer under
+	// other keys, which are ignored, so it starts again from default.
+	EQ eq.Settings `json:"eq"`
 
 	path string // where they were loaded from, and are saved to
 }
 
 func defaultSettings() settings {
 	s := settings{
-		NotchActivity:   true,
-		Quality:         "exhigh",
-		Appearance:      "system",
-		Volume:          0.8,
-		Normalize:       true,
-		AppIcon:         "dock-and-menubar",
-		CacheMB:         2048,
-		Captions:        true,
-		EqualizerPreset: "flat",
+		NotchActivity: true,
+		Quality:       "exhigh",
+		Appearance:    "system",
+		Volume:        0.8,
+		Normalize:     true,
+		AppIcon:       "dock-and-menubar",
+		CacheMB:       2048,
+		Captions:      true,
+		EQ:            eq.Default(),
 	}
 	s.Platform = string(platform.FnmusicID)
 	return s
@@ -187,6 +184,7 @@ func loadSettings() settings {
 		}
 		s.path = path
 	}
+	s.EQ.Normalize()
 	return s
 }
 

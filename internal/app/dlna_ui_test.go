@@ -4,9 +4,9 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"netease-music-mygo/internal/eq"
 	"netease-music-mygo/internal/netease"
 	"netease-music-mygo/internal/player/dlna"
-	"netease-music-mygo/internal/player/mpv"
 )
 
 // Tests that clicking the cast button toggles the DLNA device selection popover.
@@ -89,18 +89,30 @@ func TestActiveCastDeviceVisibleWhileScanning(t *testing.T) {
 func TestEqualizerSettingsAndPresets(t *testing.T) {
 	a := newTestApp()
 	a.settings.UseMPV = true
-	a.settings.EqualizerEnabled = true
-	a.settings.EqualizerPreset = "vocal"
-	preset, _ := mpv.FindPreset("vocal")
-	a.settings.EqualizerGains = preset.Gains
+	preset, _ := eq.Builtin("Vocal")
+	a.settings.EQ = eq.Settings{
+		Enabled: true,
+		Type:    preset.Type,
+		Preamp:  preset.Preamp,
+		Bands:   append([]float64(nil), preset.Bands...),
+		Preset:  preset.Name,
+	}
 	a.syncMPVSettings()
 
 	cfg := a.pl.MPVConfig()
 	if !cfg.EqualizerEnabled {
 		t.Error("expected EqualizerEnabled to be true in player config")
 	}
-	if cfg.EqualizerGains != preset.Gains {
-		t.Errorf("got gains %v, want %v", cfg.EqualizerGains, preset.Gains)
+	if cfg.EqualizerType != preset.Type {
+		t.Errorf("got type %q, want %q", cfg.EqualizerType, preset.Type)
+	}
+	if len(cfg.EqualizerBands) != len(preset.Bands) {
+		t.Fatalf("got %d bands, want %d", len(cfg.EqualizerBands), len(preset.Bands))
+	}
+	for i := range preset.Bands {
+		if cfg.EqualizerBands[i] != preset.Bands[i] {
+			t.Errorf("band %d: got %v, want %v", i, cfg.EqualizerBands[i], preset.Bands[i])
+		}
 	}
 }
 

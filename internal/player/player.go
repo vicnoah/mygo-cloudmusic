@@ -94,6 +94,11 @@ type Player struct {
 	mpvOut   *mpv.Engine
 	dlnaCtrl *dlna.Controller
 
+	// rgDB is the replaygain preamp last set on mpvOut, and rgSet whether
+	// one was: changing the volume need not set it again.
+	rgDB  float64
+	rgSet bool
+
 	// pending holds a seek asked for while the track loads.
 	pending time.Duration
 	// A seek playing fades out, then lands, then fades in: meanwhile the
@@ -510,6 +515,7 @@ func (p *Player) SetUseMPV(use bool) {
 		if !use && p.mpvOut != nil {
 			p.mpvOut.Close()
 			p.mpvOut = nil
+			p.rgSet = false
 		}
 	}
 }
@@ -523,7 +529,7 @@ func (p *Player) UsingMPV() bool {
 func (p *Player) SetMPVConfig(cfg mpv.Config) {
 	p.mpvCfg = cfg
 	if p.mpvOut != nil {
-		p.mpvOut.SetEqualizer(cfg.EqualizerPreamp, cfg.EqualizerGains, cfg.EqualizerEnabled)
+		p.mpvOut.SetEqualizer(cfg.EqualizerPreamp, cfg.EqualizerBands, cfg.EqualizerEnabled, cfg.EqualizerType)
 		p.mpvOut.SetAudioDevice(cfg.AudioDevice)
 	}
 }
@@ -542,16 +548,6 @@ func (p *Player) AudioDevices() []mpv.AudioDevice {
 		return p.mpvOut.AudioDevices()
 	}
 	return mpv.AudioDevices()
-}
-
-// SetEqualizer updates equalizer configuration and pushes to active MPV engine.
-func (p *Player) SetEqualizer(preamp float64, gains [10]float64, enabled bool) {
-	p.mpvCfg.EqualizerEnabled = enabled
-	p.mpvCfg.EqualizerPreamp = preamp
-	p.mpvCfg.EqualizerGains = gains
-	if p.mpvOut != nil {
-		p.mpvOut.SetEqualizer(preamp, gains, enabled)
-	}
 }
 
 // MPVConfig returns the current MPV configuration.
@@ -713,13 +709,19 @@ func (p *Player) applyGain() {
 		if p.Normalize != nil && p.Normalize() && p.info != nil && p.info.Gain != 0 {
 			db = p.info.Gain + normPreamp
 		}
-		p.mpvOut.SetReplayGainPreamp(db)
+		// Setting replaygain is not free, and a volume change keeps it:
+		// set it only when the track or the normalization changed it.
+		if !p.rgSet || p.rgDB != db {
+			p.mpvOut.SetReplayGainPreamp(db)
+			p.rgDB, p.rgSet = db, true
+		}
 	}
 }
 
-// normPreamp lifts normalized tracks, which NetEase brings to the quiet
-// loudness of ReplayGain, nearer to how loud music plays elsewhere.
-const normPreamp = 4
+// normPreamp is the extra gain normalized tracks get on top of their
+// measured ReplayGain. At 0 it leaves the headroom ReplayGain measured; a
+// positive value lifts quiet tracks, and their noise floor with them.
+const normPreamp = 0
 
 // normGain is the gain that brings a track as loud as others, as NetEase
 // measured it, but never so loud that its peaks would clip.
@@ -961,6 +963,7 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 						return
 					}
 					p.mpvOut = engine
+					p.rgSet = false
 				}
 				playURL := info.URL
 				if p.Cache != nil {
