@@ -1,9 +1,8 @@
 // Command icon draws the app icons: the layers of AppIcon.icon, the Icon
 // Composer document that macOS 26 and later render in Liquid Glass, and
-// resources/icon.png, the same icon as macOS draws it, on the grid of older
-// macOS icons, for older macOS and Windows; and from AppIcon-dev.icon, the
-// same picture inverted, resources/icon-dev.png, the icon of mygo dev
-// builds.
+// resources/icon.png, the same icon as macOS draws it, full-bleed for older
+// macOS and Windows; and from AppIcon-dev.icon, the same picture inverted,
+// resources/icon-dev.png, the icon of mygo dev builds.
 //
 // Run it from the repository root on a Mac with Xcode 26 or later:
 //
@@ -16,9 +15,6 @@ package main
 import (
 	"fmt"
 	"image"
-	"image/color"
-	"image/draw"
-	"image/png"
 	"log"
 	"math"
 	"os"
@@ -213,20 +209,19 @@ func labelSVG(p palette) string {
 		p.labelTop, p.labelBottom, p.labelRing, p.spindle))
 }
 
-// render has ictool draw document as macOS does, and lays it on the
-// 1024-pixel grid of macOS icons at output: an 824-pixel body, centered,
-// over a soft shadow.
+// render has ictool draw document at the full 1024-pixel size: the icon
+// fills its canvas, and macOS applies the rounded corners. An inset icon
+// on the old macOS grid left a transparent ring when Windows showed this
+// PNG as the app's icon.
 func render(document, output string) error {
-	const canvas, body = 1024, 824
 	dir, err := os.MkdirTemp("", "icon")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(dir)
 	drawn := filepath.Join(dir, "icon.png")
-	size := fmt.Sprint(body)
 	if out, err := exec.Command(ictool, document, "--export-image", "--output-file", drawn,
-		"--platform", "macOS", "--rendition", "Default", "--width", size, "--height", size, "--scale", "1").CombinedOutput(); err != nil {
+		"--platform", "macOS", "--rendition", "Default", "--width", "1024", "--height", "1024", "--scale", "1").CombinedOutput(); err != nil {
 		return fmt.Errorf("ictool (it comes with Xcode 26 or later): %v\n%s", err, out)
 	}
 	// ictool draws in Display P3, and the PNG this writes carries no
@@ -234,55 +229,9 @@ func render(document, output string) error {
 	if out, err := exec.Command("sips", "--matchTo", "/System/Library/ColorSync/Profiles/sRGB Profile.icc", drawn).CombinedOutput(); err != nil {
 		return fmt.Errorf("sips: %v\n%s", err, out)
 	}
-	f, err := os.Open(drawn)
+	b, err := os.ReadFile(drawn)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	src, err := png.Decode(f)
-	if err != nil {
-		return err
-	}
-
-	at := image.Pt((canvas-body)/2, (canvas-body)/2)
-	dst := image.NewNRGBA(image.Rect(0, 0, canvas, canvas))
-	shadow := image.NewAlpha(dst.Bounds())
-	draw.Draw(shadow, src.Bounds().Add(at).Add(image.Pt(0, 12)), src, src.Bounds().Min, draw.Src)
-	blur(shadow, 10)
-	draw.DrawMask(dst, dst.Bounds(), image.NewUniform(color.NRGBA{A: 72}), image.Point{}, shadow, image.Point{}, draw.Over)
-	draw.Draw(dst, src.Bounds().Add(at), src, src.Bounds().Min, draw.Over)
-
-	out, err := os.Create(output)
-	if err != nil {
-		return err
-	}
-	if err := png.Encode(out, dst); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
-}
-
-// blur approximates a Gaussian blur of the given radius with three box
-// blurs in each direction.
-func blur(m *image.Alpha, radius int) {
-	w, h := m.Rect.Dx(), m.Rect.Dy()
-	buf := make([]uint8, len(m.Pix))
-	pass := func(src, dst []uint8, count, length, stride, step int) {
-		for line := range count {
-			base := line * stride
-			sum := 0
-			for i := -radius; i <= radius; i++ {
-				sum += int(src[base+min(max(i, 0), length-1)*step])
-			}
-			for i := range length {
-				dst[base+i*step] = uint8(sum / (2*radius + 1))
-				sum += int(src[base+min(i+radius+1, length-1)*step]) - int(src[base+max(i-radius, 0)*step])
-			}
-		}
-	}
-	for range 3 {
-		pass(m.Pix, buf, h, w, m.Stride, 1)
-		pass(buf, m.Pix, w, h, 1, m.Stride)
-	}
+	return os.WriteFile(output, b, 0o644)
 }
