@@ -20,7 +20,7 @@ func ensureFirewallRule() {
 			return
 		}
 		cmd := exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
-			"name=MyGo 云音乐",
+			"name=肥牛音乐",
 			"dir=in",
 			"action=allow",
 			"program="+exe,

@@ -82,7 +82,7 @@ func (a *app) applyTray() {
 		if runtime.GOOS == "darwin" {
 			icon, template = trayTemplate, true
 		}
-		t, err := mygo.NewTray(mygo.TrayOptions{ID: "cloudmusic", Icon: icon, IconIsTemplate: template, ToolTip: mygo.App.Name(), Menu: a.trayMenu()})
+		t, err := mygo.NewTray(mygo.TrayOptions{ID: "cloudmusic", Icon: icon, IconIsTemplate: template, ToolTip: appName, Menu: a.trayMenu()})
 		if err != nil {
 			log.Println("tray:", err)
 			return
@@ -112,7 +112,7 @@ func (a *app) trayMenu() *mygo.Menu {
 			fn()
 		}
 	}
-	name := mygo.App.Name()
+	name := appName
 	lockLabel := "锁定桌面歌词"
 	if a.desktopLyricsLocked {
 		lockLabel = "解锁桌面歌词"

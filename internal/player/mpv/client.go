@@ -182,7 +182,7 @@ func NewInstance(opts ...map[string]string) (*Instance, error) {
 	inst.SetOption("vo", "null")
 	inst.SetOption("audio-display", "no")
 	inst.SetOption("idle", "yes")
-	inst.SetOption("audio-client-name", "MyGo 云音乐")
+	inst.SetOption("audio-client-name", "肥牛音乐")
 	inst.SetOption("prefetch-playlist", "yes")
 
 	// High resilience audio buffering & demuxer options (anti-stutter)

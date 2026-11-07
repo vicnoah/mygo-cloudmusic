@@ -16,7 +16,7 @@ import (
 )
 
 // DefaultClientName names this application to Subsonic servers.
-const DefaultClientName = "MyGoCloudMusic"
+const DefaultClientName = "WagyuMusic"
 
 // ErrSignedOut is returned when an operation requires an authenticated client.
 var ErrSignedOut = errors.New("subsonic: not connected")

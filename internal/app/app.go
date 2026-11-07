@@ -214,6 +214,9 @@ func (a *app) showMain() {
 
 // Run runs the app until it quits.
 func Run() error {
+	// Before the lock and anything that reads them: the app's folders are
+	// named in ASCII, though it calls itself 肥牛音乐.
+	useDataPaths()
 	// Starting the app again, as from its shortcut while it plays from the
 	// tray, hands the launch over to the instance already running, which
 	// opens its window again, instead of running a second app beside it.
@@ -261,7 +264,7 @@ func Run() error {
 		a.initPlatformState()
 		a.configurePlatformPlayer()
 		a.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:         mygo.App.Name(),
+			Title:         appName,
 			Width:         1180,
 			Height:        780,
 			MinWidth:      880,

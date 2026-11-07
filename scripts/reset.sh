@@ -12,7 +12,7 @@
 # quit first.
 set -euo pipefail
 
-name="MyGo 云音乐"
+name="Wagyu Music"
 id="dev.egoist.cloudmusic"
 release=0 keep_login=0 songs=0
 for arg in "$@"; do

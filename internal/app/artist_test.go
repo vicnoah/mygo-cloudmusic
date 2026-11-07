@@ -41,8 +41,13 @@ func TestArtistNameOpensTheirPage(t *testing.T) {
 
 	tt.Advance(time.Second)
 	tt.Frame()
-	if err := tt.Click("丙"); err != nil {
-		t.Fatal(err)
+	// The name sits inside the song row's button, which the tester takes
+	// for the target of its center; click where it is, as the row gets it,
+	// and check the link opened instead of the song playing.
+	if r, ok := tt.Find("丙"); !ok {
+		t.Fatal("no artist name 丙")
+	} else {
+		tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
 	}
 	tt.Frame()
 	if a.route != (route{page: pageArtist, id: 13}) {

@@ -16,7 +16,7 @@ func (a *app) setMenu() {
 			a.redraw()
 		}
 	}
-	name := mygo.App.Name()
+	name := appName
 	appMenu := []*mygo.MenuItem{
 		{Role: mygo.RoleAbout, Label: "关于" + name},
 		{Label: "检查更新…", Click: run(checkForUpdates)},

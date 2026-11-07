@@ -1,8 +1,8 @@
 {
-  "name": "MyGo 云音乐",
+  "name": "Wagyu Music",
   "identifier": "dev.egoist.cloudmusic",
-  "slug": "mygo-cloudmusic",
-  "version": "0.2.21",
+  "slug": "wagyu-music",
+  "version": "0.2.22",
   "out": "build",
   "updates": {
     "publicKey": "j48t3n7ieAE6ZSiAqdQVpQWSdlsg1BPoxwym3bXqXJ8=",
@@ -11,16 +11,22 @@
   "macos": {
     "icon": "icon/AppIcon.icon",
     "minimumSystemVersion": "13.0",
+    "dmgTitle": "肥牛音乐",
+    "infoPlist": {
+      "CFBundleName": "肥牛音乐",
+      "CFBundleDisplayName": "肥牛音乐"
+    },
     "signingIdentity": "Developer ID Application: xinyu zeng (GJE9R5VE87)",
     "notarize": { "keychainProfile": "notary" }
   },
   "linux": {
-    "comment": "第三方网易云音乐桌面客户端",
+    "comment": "第三方自建音乐库桌面客户端",
     "categories": ["AudioVideo", "Audio", "Player"],
     "webview": false
   },
   "windows": {
-    "installDirName": "MyGo 云音乐",
+    "displayName": "肥牛音乐",
+    "installDirName": "Wagyu Music",
     "installerInclude": "resources/installer.nsh"
   }
 }

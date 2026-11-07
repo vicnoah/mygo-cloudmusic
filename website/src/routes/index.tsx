@@ -25,14 +25,14 @@ function Hero() {
       <div class="grooves" aria-hidden="true" />
       <div class="hero-text">
         <p class="eyebrow">
-          <span class="pill">开源</span>第三方网易云音乐桌面客户端
+          <span class="pill">开源</span>第三方自建音乐库桌面客户端
         </p>
         <h1 class="display hero-title">
           <span>原生地，</span>
           <span>安静地听歌。</span>
         </h1>
         <p class="lede">
-          用 Go 与 <a href={mygo}>MyGo</a> 写成，原生界面，没有 WebView。启动快，占用少，闲下来就安安静静，不打扰你的电脑。
+          用 Go 与 <a href={mygo}>MyGo</a> 写成，原生界面，没有 WebView。连接飞牛音乐、Songloft 与 Navidrome 等自建服务，也能登录网易云和 QQ 音乐；启动快，占用少，闲下来就安安静静，不打扰你的电脑。
         </p>
         <div class="actions">
           <Link class="btn btn-primary" to="/download">
@@ -44,7 +44,7 @@ function Hero() {
             查看源代码
           </a>
         </div>
-        <p class="fine">免费 · 以 AGPL-3.0 开源 · 扫码登录你的网易云账号</p>
+        <p class="fine">免费 · 以 AGPL-3.0 开源 · 自建音乐库与网易云、QQ 音乐</p>
       </div>
       <div class="hero-window">
         <AppWindow />
@@ -82,18 +82,18 @@ const features: Feature[] = [
   },
   {
     icon: 'radio',
-    title: '私人 FM 与心动模式',
-    body: '推荐、熟悉、探索三种口味；或者开启心动模式，从你喜欢的歌出发。',
+    title: '自建音乐库',
+    body: '连接飞牛音乐、Songloft 与 Navidrome 等 Subsonic 服务，按文件夹、专辑与歌手浏览。',
   },
   {
     icon: 'calendar',
-    title: '每日推荐',
-    body: '每天 6:00 更新。还有推荐歌单、排行榜、我的歌单与搜索。',
+    title: '多个音乐源，互不打扰',
+    body: '各平台的账号、歌单与收藏互相独立，底部播放器、歌词和缓存共用。',
   },
   {
     icon: 'qr',
-    title: '扫码登录',
-    body: '用网易云音乐 App 扫一扫。登录态保存在系统凭据存储中。',
+    title: '网易云与 QQ 音乐',
+    body: '除了自建音乐库，也能登录网易云和 QQ 音乐，扫码或账号登录。',
   },
   {
     icon: 'notch',

@@ -1,6 +1,6 @@
 # 网站
 
-MyGo 云音乐的主页，用 TanStack Start 与 Solid 写成。构建时预渲染为静态文件，部署到 Cloudflare（Workers 静态资源，不运行 Worker 脚本）。
+肥牛音乐的主页，用 TanStack Start 与 Solid 写成。构建时预渲染为静态文件，部署到 Cloudflare（Workers 静态资源，不运行 Worker 脚本）。
 
 ```bash
 bun install          # 在仓库根目录

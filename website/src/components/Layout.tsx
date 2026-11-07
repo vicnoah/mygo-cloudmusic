@@ -47,7 +47,7 @@ function Footer() {
     <footer class="footer">
       <div class="footer-inner">
         <span>
-          {site.name} · 以 <a href={`${repo}/blob/main/LICENSE`}>AGPL-3.0</a> 开源 · 与网易云音乐官方无关
+          {site.name} · 以 <a href={`${repo}/blob/main/LICENSE`}>AGPL-3.0</a> 开源 · 与网易云音乐、飞牛官方无关
         </span>
         <a class="icon-link" href={repo} aria-label="GitHub 上的源代码">
           <GitHubMark size={17} />
