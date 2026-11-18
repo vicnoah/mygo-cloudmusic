@@ -3,6 +3,7 @@ package dlna
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -81,6 +82,10 @@ func NewProxy() (*Proxy, error) {
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 20,
 				IdleConnTimeout:     90 * time.Second,
+				// A NAS on the LAN answers with a certificate no public
+				// authority vouches for; the browser lets its user go on,
+				// and so must the streams this proxy fetches for players.
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 			},
 		},
 	}

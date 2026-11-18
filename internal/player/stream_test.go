@@ -323,6 +323,27 @@ func TestCacheKeepsOnlyKnownLevels(t *testing.T) {
 	}
 }
 
+// A song streamed from a self-signed HTTPS server downloads, as a NAS on
+// the LAN serves its files, instead of failing on the untrusted certificate.
+func TestDownloadSelfSignedHTTPS(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("self-signed audio"))
+	}))
+	defer srv.Close()
+
+	dl := startDownload(srv.URL, 17, nil, nil)
+	defer dl.Close()
+	dl.waitFor(17)
+	dl.mu.Lock()
+	defer dl.mu.Unlock()
+	if dl.err != nil {
+		t.Fatalf("download failed: %v", dl.err)
+	}
+	if got := string(dl.data); got != "self-signed audio" {
+		t.Errorf("got %q, want 'self-signed audio'", got)
+	}
+}
+
 // A song the cache won't keep sets aside no more memory than maxPrealloc,
 // whatever size the API says it is, which it set aside in full before.
 func TestStreamSizeIsNotTrusted(t *testing.T) {

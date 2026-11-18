@@ -148,6 +148,41 @@ func TestDLNAProxyRemoteStream(t *testing.T) {
 	}
 }
 
+// Tests that the proxy fetches a self-signed HTTPS stream, as a NAS on the
+// LAN serves it, instead of failing on the untrusted certificate.
+func TestDLNAProxySelfSignedStream(t *testing.T) {
+	remoteServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("self-signed audio"))
+	}))
+	defer remoteServer.Close()
+
+	proxy, err := NewProxy()
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	defer proxy.Close()
+
+	streamURL := proxy.Register("track-selfsigned", StreamSource{
+		RemoteURL:   remoteServer.URL,
+		ContentType: "audio/mpeg",
+	})
+	resp, err := http.Get(streamURL)
+	if err != nil {
+		t.Fatalf("GET proxy self-signed stream: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("got status %d body %q, want 200", resp.StatusCode, b)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if string(b) != "self-signed audio" {
+		t.Errorf("got %q, want 'self-signed audio'", b)
+	}
+}
+
 // Tests that the proxy overrides bogus text/html upstream Content-Type from servers like Feiniu.
 func TestDLNAProxyOverridesBogusContentType(t *testing.T) {
 	remoteServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

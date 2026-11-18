@@ -3,6 +3,7 @@ package player
 import (
 	"cmp"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -17,6 +18,15 @@ import (
 
 	"netease-music-mygo/internal/netease"
 )
+
+// streamClient fetches audio streams. A NAS on the LAN answers over HTTPS
+// with a certificate no public authority vouches for; the browser lets its
+// user go on, and so must the streams the app downloads to play.
+var streamClient = &http.Client{
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	},
+}
 
 // A download fetches a song as it plays: readers wait for the bytes they
 // need, so playback starts with the first ones. The song comes into a file
@@ -108,7 +118,7 @@ func (d *download) run(ctx context.Context, url string, header func() http.Heade
 			req.Header[k] = v
 		}
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := streamClient.Do(req)
 	if err != nil {
 		finish(err)
 		return
