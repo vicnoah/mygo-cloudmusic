@@ -29,13 +29,51 @@ type StreamSource struct {
 	// RemoteURL is the original remote audio stream URL, if any.
 	RemoteURL string
 	// Headers are extra HTTP headers required by the remote server (e.g. Auth).
-	Headers http.Header
+	Headers   http.Header
+	Header    func() http.Header
+	Telemetry *streamTelemetry
 	// LocalFile is the path to a fully cached local file, or "".
 	LocalFile string
 	// ContentType is the MIME type (e.g. "audio/flac", "audio/mpeg").
 	ContentType string
 	// ContentLength is the file size in bytes, or 0 if unknown.
 	ContentLength int64
+}
+
+type streamTelemetry struct {
+	bytes   atomic.Int64
+	failure atomic.Int32
+}
+
+type trackedAudioWriter struct {
+	http.ResponseWriter
+	telemetry *streamTelemetry
+	code      int
+}
+
+func (w *trackedAudioWriter) WriteHeader(code int) {
+	w.code = code
+	if code >= 400 {
+		w.telemetry.failure.Store(int32(code))
+	} else if code == http.StatusOK || code == http.StatusPartialContent {
+		w.telemetry.failure.Store(0)
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *trackedAudioWriter) Write(b []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(b)
+	if w.code == 0 || w.code == http.StatusOK || w.code == http.StatusPartialContent {
+		w.telemetry.bytes.Add(int64(n))
+	}
+	return n, err
+}
+
+func (s StreamSource) requestHeaders() http.Header {
+	if s.Header != nil {
+		return s.Header()
+	}
+	return s.Headers
 }
 
 // Proxy is a lightweight local HTTP streaming proxy for DLNA media renderers.
@@ -334,7 +372,10 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 		if src.ContentType != "" {
 			w.Header().Set("Content-Type", src.ContentType)
 		}
-		http.ServeFile(w, r, src.LocalFile)
+		if src.Telemetry != nil {
+			w = &trackedAudioWriter{ResponseWriter: w, telemetry: src.Telemetry}
+		}
+		http.ServeFile(w, r.WithContext(ctx), src.LocalFile)
 		return
 	}
 
@@ -351,8 +392,12 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	// Handle HEAD requests specifically to learn content length while preventing 403 / 405 rejections from CDNs
 	if r.Method == http.MethodHead {
-		headReq, _ := http.NewRequestWithContext(ctx, http.MethodHead, src.RemoteURL, nil)
-		for k, vv := range src.Headers {
+		headReq, err := http.NewRequestWithContext(ctx, http.MethodHead, src.RemoteURL, nil)
+		if err != nil {
+			http.Error(w, "audio source unavailable", http.StatusBadGateway)
+			return
+		}
+		for k, vv := range src.requestHeaders() {
 			for _, v := range vv {
 				headReq.Header.Add(k, v)
 			}
@@ -381,8 +426,10 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Fallback probe for CDNs rejecting HEAD: send Range: 0-0 GET to learn content length
-		probeReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, src.RemoteURL, nil)
-		for k, vv := range src.Headers {
+		probeReq := headReq.Clone(ctx)
+		probeReq.Method = http.MethodGet
+		probeReq.Header = make(http.Header)
+		for k, vv := range src.requestHeaders() {
 			for _, v := range vv {
 				probeReq.Header.Add(k, v)
 			}
@@ -392,8 +439,10 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 		}
 		probeReq.Header.Set("Range", "bytes=0-0")
 		probeResp, err := client.Do(probeReq)
-		if err == nil {
+		if probeResp != nil {
 			defer probeResp.Body.Close()
+		}
+		if err == nil && (probeResp.StatusCode == http.StatusOK || probeResp.StatusCode == http.StatusPartialContent) {
 			if cr := probeResp.Header.Get("Content-Range"); cr != "" {
 				if _, total, ok := strings.Cut(cr, "/"); ok && total != "*" {
 					w.Header().Set("Content-Length", total)
@@ -415,7 +464,7 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for k, vv := range src.Headers {
+	for k, vv := range src.requestHeaders() {
 		for _, v := range vv {
 			req.Header.Add(k, v)
 		}
@@ -429,7 +478,10 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		if src.Telemetry != nil {
+			src.Telemetry.failure.Store(http.StatusBadGateway)
+		}
+		http.Error(w, "audio source unavailable", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
@@ -450,6 +502,14 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 
+	if src.Telemetry != nil {
+		if resp.StatusCode >= 400 {
+			src.Telemetry.failure.Store(int32(resp.StatusCode))
+		} else if r.Method == http.MethodGet {
+			src.Telemetry.failure.Store(0)
+			w = &trackedAudioWriter{ResponseWriter: w, telemetry: src.Telemetry, code: resp.StatusCode}
+		}
+	}
 	if r.Method != http.MethodHead {
 		_, _ = io.Copy(w, resp.Body)
 	}
@@ -615,10 +675,14 @@ func FormatToMIME(format string) string {
 		return "audio/flac"
 	case "mp3":
 		return "audio/mpeg"
-	case "m4a", "aac":
+	case "m4a", "mp4", "alac":
+		return "audio/mp4"
+	case "aac":
 		return "audio/mp4"
 	case "wav":
 		return "audio/wav"
+	case "lpcm":
+		return "audio/L16;rate=44100;channels=2"
 	case "ogg", "vorbis":
 		return "audio/ogg"
 	case "opus":
@@ -628,21 +692,6 @@ func FormatToMIME(format string) string {
 	case "ape":
 		return "audio/x-ape"
 	default:
-		return "audio/mpeg"
+		return "application/octet-stream"
 	}
-}
-
-func parseDuration(s string) time.Duration {
-	// Parse UPnP RelTime or TrackDuration format: "H:MM:SS" or "H:MM:SS.mmm"
-	var h, m int
-	var sec float64
-	_, err := fmt.Sscanf(s, "%d:%d:%f", &h, &m, &sec)
-	if err == nil {
-		return time.Duration(h)*time.Hour + time.Duration(m)*time.Minute + time.Duration(sec*float64(time.Second))
-	}
-	// Try fallback to integer seconds
-	if secInt, err := strconv.Atoi(s); err == nil {
-		return time.Duration(secInt) * time.Second
-	}
-	return 0
 }

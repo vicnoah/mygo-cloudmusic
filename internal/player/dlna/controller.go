@@ -18,6 +18,7 @@ type TrackMeta struct {
 	Artist          string
 	Album           string
 	CoverURL        string
+	ExpectCover     bool
 	CoverData       []byte // Raw cover bytes (for custom schemes like fnmusic:// or pre-resolved covers)
 	StreamURL       string
 	LocalFile       string
@@ -29,11 +30,14 @@ type TrackMeta struct {
 	BitsPerSample   int // e.g. 16, 24
 	Channels        int // e.g. 2
 	Headers         http.Header
+	Header          func() http.Header
+	telemetry       *streamTelemetry
 }
 
 // Controller manages DLNA media discovery, streaming proxy, and remote device playback.
 type Controller struct {
 	mu           sync.RWMutex
+	remoteMu     sync.Mutex
 	proxy        *Proxy
 	knownDevices map[string]*Device // Keyed by device URL / ID to prevent flapping
 	devices      []*Device          // Stable list presented to the UI
@@ -42,13 +46,11 @@ type Controller struct {
 	nextID       string
 	remoteStops  map[string]chan struct{}
 
-	playing      bool
-	playStart    time.Time
-	lastSyncPos  time.Duration
-	lastSyncTime time.Time
-	position     time.Duration
-	duration     time.Duration
-	volume       float64 // 0..1
+	playing  bool
+	session  *castSession
+	position time.Duration
+	duration time.Duration
+	volume   float64 // 0..1
 
 	volMu      sync.Mutex
 	pendingVol float64
@@ -107,15 +109,7 @@ func (c *Controller) RefreshDevices(ctx context.Context) ([]*Device, error) {
 		if d == nil || d.ID == "" {
 			continue
 		}
-		if existing, ok := c.knownDevices[d.ID]; ok {
-			existing.URL = d.URL
-			existing.FriendlyName = d.FriendlyName
-			existing.ModelName = d.ModelName
-			existing.mr = d.mr
-			existing.av = d.av
-			existing.rc = d.rc
-			existing.LastSeen = now
-		} else {
+		if c.activeDevice == nil || c.activeDevice.ID != d.ID {
 			d.LastSeen = now
 			c.knownDevices[d.ID] = d
 		}
@@ -135,7 +129,7 @@ func (c *Controller) rebuildDeviceListLocked() {
 	var active *Device
 
 	for _, dev := range c.knownDevices {
-		if c.activeDevice != nil && (dev.ID == c.activeDevice.ID || dev.FriendlyName == c.activeDevice.FriendlyName) {
+		if c.activeDevice != nil && dev.ID == c.activeDevice.ID {
 			active = dev
 		} else {
 			others = append(others, dev)
@@ -190,15 +184,10 @@ func (c *Controller) ActiveDevice() *Device {
 // SelectDevice connects to a target device (or disconnects if target is nil/empty).
 func (c *Controller) SelectDevice(deviceID string) error {
 	c.mu.Lock()
-	if c.cancelPoll != nil {
-		c.cancelPoll()
-		c.cancelPoll = nil
-	}
-
 	oldDev := c.activeDevice
 	if deviceID == "" {
-		c.clearTracksLocked()
 		c.stopDeviceLocked(oldDev)
+		c.clearTracksLocked()
 		c.activeDevice = nil
 		c.playing = false
 		c.rebuildDeviceListLocked()
@@ -232,10 +221,13 @@ func (c *Controller) SelectDevice(deviceID string) error {
 
 	// If switching between two different DLNA devices, stop the previous one first
 	if oldDev != nil && oldDev.ID != found.ID {
-		c.clearTracksLocked()
 		c.stopDeviceLocked(oldDev)
+		c.clearTracksLocked()
 	}
 
+	if oldDev != nil && oldDev.ID == found.ID {
+		found = oldDev
+	}
 	c.activeDevice = found
 	if c.knownDevices == nil {
 		c.knownDevices = make(map[string]*Device)
@@ -243,102 +235,6 @@ func (c *Controller) SelectDevice(deviceID string) error {
 	c.knownDevices[found.ID] = found
 	c.rebuildDeviceListLocked()
 	c.mu.Unlock()
-	c.notify()
-	return nil
-}
-
-// PlayTrack streams a track to the active DLNA device via the local proxy with rich DIDL-Lite metadata.
-func (c *Controller) PlayTrack(ctx context.Context, meta TrackMeta, startPos time.Duration) error {
-	if meta.StreamURL == "" && meta.LocalFile == "" {
-		return fmt.Errorf("dlna: no audio source")
-	}
-	c.mu.Lock()
-	dev := c.activeDevice
-	if dev == nil {
-		c.mu.Unlock()
-		return fmt.Errorf("dlna: no active device")
-	}
-	for stopped := c.remoteStops[dev.ID]; stopped != nil; stopped = c.remoteStops[dev.ID] {
-		c.mu.Unlock()
-		select {
-		case <-stopped:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		c.mu.Lock()
-		if c.activeDevice != dev {
-			c.mu.Unlock()
-			return context.Canceled
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		c.mu.Unlock()
-		return err
-	}
-	if c.cancelPoll != nil {
-		c.cancelPoll()
-		c.cancelPoll = nil
-	}
-
-	c.clearTracksLocked()
-	c.currentID = meta.ID
-	item := c.registerTrack(meta, dev)
-
-	now := time.Now()
-	c.duration = meta.Duration
-	c.position = startPos
-	c.lastSyncPos = startPos
-	c.lastSyncTime = now
-	c.playing = true
-	c.playStart = now
-	c.mu.Unlock()
-
-	// 1. Set media with automatic Stop-before-Set protection to clear busy states
-	if err := dev.SetMedia(ctx, item); err != nil {
-		c.mu.Lock()
-		c.playing = false
-		c.mu.Unlock()
-		c.notify()
-		return fmt.Errorf("dlna: set media: %w", err)
-	}
-
-	// 2. Instruct renderer to play
-	if err := dev.Play(ctx); err != nil {
-		c.mu.Lock()
-		c.playing = false
-		c.mu.Unlock()
-		c.notify()
-		return fmt.Errorf("dlna: play: %w", err)
-	}
-
-	// 3. Apply initial seek offset asynchronously if resuming from another output,
-	// waiting for renderer pipeline to buffer first (following Supersonic's pattern).
-	if startPos > 0 {
-		go func() {
-			timer := time.NewTimer(2 * time.Second)
-			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-			}
-			c.mu.RLock()
-			current := c.playing && c.activeDevice == dev && c.currentID == meta.ID
-			c.mu.RUnlock()
-			if current {
-				seekCtx, seekCancel := context.WithTimeout(ctx, 3*time.Second)
-				defer seekCancel()
-				_ = dev.Seek(seekCtx, int(startPos.Seconds()))
-			}
-		}()
-	}
-
-	pollCtx, cancel := context.WithCancel(ctx)
-	c.mu.Lock()
-	c.cancelPoll = cancel
-	c.mu.Unlock()
-
-	go c.pollProgress(pollCtx, dev)
 	c.notify()
 	return nil
 }
@@ -372,6 +268,8 @@ func (c *Controller) registerTrack(meta TrackMeta, dev *Device) *avtransport.Med
 		LocalFile:     meta.LocalFile,
 		ContentType:   mime,
 		ContentLength: meta.Size,
+		Header:        meta.Header,
+		Telemetry:     meta.telemetry,
 	})
 
 	lanURL := c.proxy.LANURLFor(meta.ID, dev.URL, meta.Format)
@@ -381,6 +279,8 @@ func (c *Controller) registerTrack(meta TrackMeta, dev *Device) *avtransport.Med
 		coverURI = c.proxy.LANCoverURLFor(meta.ID, dev.URL)
 	} else if meta.CoverURL != "" {
 		c.proxy.RegisterCover(meta.ID, meta.CoverURL)
+		coverURI = c.proxy.LANCoverURLFor(meta.ID, dev.URL)
+	} else if meta.ExpectCover {
 		coverURI = c.proxy.LANCoverURLFor(meta.ID, dev.URL)
 	}
 
@@ -401,123 +301,6 @@ func (c *Controller) registerTrack(meta TrackMeta, dev *Device) *avtransport.Med
 	}
 }
 
-func (c *Controller) pollProgress(ctx context.Context, dev *Device) {
-	// 1. Initial 2-second settle: wait for remote renderer to start streaming and reach playing state
-	select {
-	case <-ctx.Done():
-		return
-	case <-time.After(2 * time.Second):
-	}
-
-	// 2. Initial calibration
-	if c.calibrateProgress(ctx, dev) {
-		return
-	}
-
-	// 3. Sparse calibration ticker: poll every 4 seconds to avoid overwhelming DMR microservices
-	ticker := time.NewTicker(4 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			ended := c.calibrateProgress(ctx, dev)
-			if ended {
-				return
-			}
-		}
-	}
-}
-
-func (c *Controller) calibrateProgress(ctx context.Context, dev *Device) bool {
-	tctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	pos, dur, err := dev.PositionInfo(tctx)
-	cancel()
-
-	now := time.Now()
-	c.mu.Lock()
-	if ctx.Err() != nil || c.activeDevice != dev {
-		c.mu.Unlock()
-		return true
-	}
-	if err == nil {
-		if dur > 0 {
-			c.duration = dur
-		}
-		if pos >= 0 {
-			c.position = pos
-			c.lastSyncPos = pos
-			c.lastSyncTime = now
-		}
-	}
-
-	durTotal := c.duration
-	calcPos := c.position
-	if c.playing && !c.lastSyncTime.IsZero() {
-		calcPos = c.lastSyncPos + time.Since(c.lastSyncTime)
-	}
-	wasPlaying := c.playing
-	sinceStart := time.Since(c.playStart)
-	c.mu.Unlock()
-
-	// If track duration has elapsed or is within 1s of finish, check if track has ended
-	trackNearingEnd := durTotal > 0 && calcPos >= durTotal-1*time.Second
-	if trackNearingEnd || (durTotal > 0 && sinceStart > durTotal+2*time.Second) {
-		sctx, scancel := context.WithTimeout(ctx, 2*time.Second)
-		state, serr := dev.TransportState(sctx)
-		scancel()
-
-		if serr == nil && (state == "STOPPED" || state == "TRANSITIONING" || trackNearingEnd) {
-			c.mu.Lock()
-			if ctx.Err() != nil || c.activeDevice != dev {
-				c.mu.Unlock()
-				return true
-			}
-			c.playing = false
-			endFn := c.onEnd
-			c.mu.Unlock()
-			c.notify()
-			if endFn != nil {
-				endFn()
-			}
-			return true
-		}
-	} else if err != nil {
-		// Only check state when position call failed
-		sctx, scancel := context.WithTimeout(ctx, 2*time.Second)
-		state, serr := dev.TransportState(sctx)
-		scancel()
-		if serr == nil {
-			c.mu.Lock()
-			if ctx.Err() != nil || c.activeDevice != dev {
-				c.mu.Unlock()
-				return true
-			}
-			if state == "STOPPED" && wasPlaying && sinceStart > 5*time.Second {
-				c.playing = false
-				endFn := c.onEnd
-				c.mu.Unlock()
-				c.notify()
-				if endFn != nil {
-					endFn()
-				}
-				return true
-			} else if state == "PAUSED_PLAYBACK" {
-				c.playing = false
-				c.mu.Unlock()
-				c.notify()
-				return false
-			}
-			c.mu.Unlock()
-		}
-	}
-
-	c.notify()
-	return false
-}
-
 // Stop drops the cast stream and stops remote playback without blocking the UI.
 func (c *Controller) Stop() {
 	c.mu.Lock()
@@ -525,11 +308,9 @@ func (c *Controller) Stop() {
 		c.cancelPoll()
 		c.cancelPoll = nil
 	}
-	c.clearTracksLocked()
 	c.stopDeviceLocked(c.activeDevice)
+	c.clearTracksLocked()
 	c.playing = false
-	c.lastSyncPos = 0
-	c.lastSyncTime = time.Time{}
 	c.position = 0
 	c.duration = 0
 	c.mu.Unlock()
@@ -538,6 +319,17 @@ func (c *Controller) Stop() {
 }
 
 func (c *Controller) clearTracksLocked() {
+	if c.cancelPoll != nil {
+		c.cancelPoll()
+		c.cancelPoll = nil
+	}
+	c.session = nil
+	c.playing = false
+	c.position, c.duration = 0, 0
+	c.revokeTracksLocked()
+}
+
+func (c *Controller) revokeTracksLocked() {
 	if c.currentID != "" {
 		c.proxy.Unregister(c.currentID)
 	}
@@ -549,12 +341,13 @@ func (c *Controller) clearTracksLocked() {
 
 // A new cast waits for any queued Stop so it cannot be stopped by the old session.
 func (c *Controller) stopDeviceLocked(dev *Device) {
-	if dev == nil {
+	if dev == nil || c.session == nil || !c.session.sent {
 		return
 	}
 	if c.remoteStops == nil {
 		c.remoteStops = make(map[string]chan struct{})
 	}
+	dev, media := c.session.device, c.session.item.URL
 	deviceID := dev.ID
 	previous := c.remoteStops[deviceID]
 	stopped := make(chan struct{})
@@ -563,9 +356,16 @@ func (c *Controller) stopDeviceLocked(dev *Device) {
 		if previous != nil {
 			<-previous
 		}
+		c.remoteMu.Lock()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = dev.Stop(ctx)
+		query, stopQuery := context.WithTimeout(ctx, 500*time.Millisecond)
+		info, _ := dev.readPosition(query)
+		stopQuery()
+		if sameMedia(info.URI, media) {
+			_ = dev.Stop(ctx)
+		}
 		cancel()
+		c.remoteMu.Unlock()
 		c.mu.Lock()
 		if c.remoteStops[deviceID] == stopped {
 			delete(c.remoteStops, deviceID)
@@ -573,77 +373,6 @@ func (c *Controller) stopDeviceLocked(dev *Device) {
 		close(stopped)
 		c.mu.Unlock()
 	}()
-}
-
-// Pause pauses the remote device.
-func (c *Controller) Pause(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	dev := c.activeDevice
-	c.playing = false
-	if !c.lastSyncTime.IsZero() {
-		c.lastSyncPos += time.Since(c.lastSyncTime)
-		c.lastSyncTime = time.Time{}
-		c.position = c.lastSyncPos
-	}
-	c.mu.Unlock()
-
-	c.notify()
-	if dev != nil {
-		go func() {
-			pctx, pcancel := context.WithTimeout(ctx, 2*time.Second)
-			defer pcancel()
-			_ = dev.Pause(pctx)
-		}()
-	}
-	return nil
-}
-
-// Resume resumes playback on the remote device.
-func (c *Controller) Resume(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	dev := c.activeDevice
-	c.playing = true
-	c.lastSyncTime = time.Now()
-	c.mu.Unlock()
-
-	c.notify()
-	if dev != nil {
-		go func() {
-			pctx, pcancel := context.WithTimeout(ctx, 2*time.Second)
-			defer pcancel()
-			_ = dev.Play(pctx)
-		}()
-	}
-	return nil
-}
-
-// Seek moves playback on the remote device to pos without blocking the UI thread.
-func (c *Controller) Seek(ctx context.Context, pos time.Duration) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	dev := c.activeDevice
-	c.position = pos
-	c.lastSyncPos = pos
-	c.lastSyncTime = time.Now()
-	c.mu.Unlock()
-
-	c.notify()
-	if dev != nil {
-		go func(targetPos time.Duration) {
-			sctx, scancel := context.WithTimeout(ctx, 3*time.Second)
-			defer scancel()
-			_ = dev.Seek(sctx, int(targetPos.Seconds()))
-		}(pos)
-	}
-	return nil
 }
 
 // SetVolume sets the volume (0..1) on the remote device with async debouncing to prevent UI freezes.
@@ -682,15 +411,7 @@ func (c *Controller) SetVolume(ctx context.Context, vol float64) error {
 func (c *Controller) Status() (playing bool, pos time.Duration, dur time.Duration) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.playing && !c.lastSyncTime.IsZero() {
-		elapsed := time.Since(c.lastSyncTime)
-		calcPos := c.lastSyncPos + elapsed
-		if c.duration > 0 && calcPos > c.duration {
-			calcPos = c.duration
-		}
-		return c.playing, calcPos, c.duration
-	}
-	return c.playing, c.position, c.duration
+	return c.playing, c.positionLocked(), c.duration
 }
 
 // IsCasting reports whether a DLNA device is currently selected and active.
@@ -707,6 +428,8 @@ func (c *Controller) Close() error {
 		c.cancelPoll()
 		c.cancelPoll = nil
 	}
+	c.stopDeviceLocked(c.activeDevice)
+	c.clearTracksLocked()
 	c.activeDevice = nil
 	c.mu.Unlock()
 

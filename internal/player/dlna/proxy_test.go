@@ -227,7 +227,7 @@ func TestFormatToMIME(t *testing.T) {
 		{"wav", "audio/wav"},
 		{"dsd", "audio/x-dsd"},
 		{"ape", "audio/x-ape"},
-		{"unknown", "audio/mpeg"},
+		{"unknown", "application/octet-stream"},
 	}
 	for _, tt := range tests {
 		got := FormatToMIME(tt.format)

@@ -509,6 +509,32 @@ func (p *Provider) Stream(ctx context.Context, tr *pluginapi.Track) (*pluginapi.
 	}, nil
 }
 
+// CastStream requests a compatible server stream without changing the saved
+// Subsonic playback policy. Raw is explicit so the server cannot choose a default
+// player conversion when the listener requested the original format.
+func (p *Provider) CastStream(ctx context.Context, tr *pluginapi.Track, format string) (*pluginapi.Stream, error) {
+	if format == "" && (p.client == nil || p.client.TranscodeMode() != "native") {
+		return nil, nil // Resolve the preferred quality through the normal path/cache.
+	}
+	sc, err := p.subsonic(ctx)
+	if err != nil {
+		return nil, err
+	}
+	params := map[string]string{"format": "raw"}
+	kind := tr.Format
+	if format == "mp3" {
+		kind, params["format"] = "mp3", "mp3"
+		if p.client != nil && p.client.MaxBitRate() > 0 {
+			params["maxBitRate"] = strconv.Itoa(p.client.MaxBitRate())
+		}
+	}
+	u, err := sc.GetStreamURL(tr.Ref, params)
+	if err != nil {
+		return nil, err
+	}
+	return &pluginapi.Stream{URL: u.String(), Type: kind}, nil
+}
+
 var (
 	defaultThumbOnce sync.Once
 	defaultThumbData []byte

@@ -91,7 +91,7 @@ func TestSwitchOutput(t *testing.T) {
 	}
 }
 
-// Reset stops a cast and clears playback while keeping the listener's selected output.
+// Reset revokes the current cast URL and clears the queue while retaining the selected output.
 func TestPlayerResetStopsCastPlayback(t *testing.T) {
 	p := New(func(func()) {})
 	defer p.DLNA().Close()
@@ -101,14 +101,19 @@ func TestPlayerResetStopsCastPlayback(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.Cue([]pluginapi.Track{{ID: 17, Name: "old track"}})
-	p.TogglePlay()
-	if playing, _, _ := p.DLNA().Status(); !playing {
-		t.Fatal("cast fixture did not start playback")
+	meta := dlna.TrackMeta{ID: "previous-platform", LocalFile: "testdata/seek.mp3", Format: "mp3"}
+	if err := p.DLNA().PrepareTrack(t.Context(), meta, 0); err != nil {
+		t.Fatal(err)
 	}
 	p.Reset()
 	p.TogglePlay()
-	if playing, _, _ := p.DLNA().Status(); playing || p.Current() != nil || len(p.Queue()) != 0 {
-		t.Fatal("reset left the previous platform playing on the renderer")
+	resp, err := http.Get(p.DLNA().Proxy().LocalURL(meta.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound || p.Current() != nil || len(p.Queue()) != 0 {
+		t.Fatal("reset kept the previous platform's stream or queue")
 	}
 	if p.DLNA().ActiveDevice() != device {
 		t.Fatal("reset did not retain the selected renderer")

@@ -137,33 +137,6 @@ func TestActiveDeviceNeverDisappearsOnRefresh(t *testing.T) {
 	}
 }
 
-// Tests smooth local progression of playback position in Status() without network polling.
-func TestSmoothStatusProgression(t *testing.T) {
-	ctrl, err := NewController(nil)
-	if err != nil {
-		t.Fatalf("NewController: %v", err)
-	}
-	defer ctrl.Close()
-
-	ctrl.mu.Lock()
-	ctrl.playing = true
-	ctrl.duration = 180 * time.Second
-	ctrl.lastSyncPos = 10 * time.Second
-	ctrl.lastSyncTime = time.Now().Add(-500 * time.Millisecond)
-	ctrl.mu.Unlock()
-
-	playing, pos, dur := ctrl.Status()
-	if !playing {
-		t.Error("expected playing to be true")
-	}
-	if dur != 180*time.Second {
-		t.Errorf("got dur %v, want 180s", dur)
-	}
-	if pos < 10400*time.Millisecond || pos > 11500*time.Millisecond {
-		t.Errorf("got pos %v, want ~10.5s", pos)
-	}
-}
-
 // Tests debounced volume updates and TrackMeta attributes.
 func TestVolumeAndTrackMeta(t *testing.T) {
 	ctrl, err := NewController(nil)

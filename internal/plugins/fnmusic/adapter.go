@@ -72,6 +72,21 @@ func (a *Adapter) OwnsTrack(tr *pluginapi.Track) bool {
 func (a *Adapter) PlaybackMedia() pluginapi.PlaybackMedia {
 	s := a.state
 	return pluginapi.PlaybackMedia{
+		CastSource: func(ctx context.Context, tr *pluginapi.Track, format string) (*pluginapi.Stream, pluginapi.SegmentedSource, error) {
+			settings := a.runtime.Transcode()
+			if format != "mp3" && (format != "" || (settings.Mode != transcodeAlways && !tr.Cue)) {
+				return nil, nil, nil
+			}
+			client := s.Client()
+			if client == nil {
+				return nil, nil, backend.ErrSignedOut
+			}
+			h, err := client.TranscodeHLSWithBitrate(ctx, tr, settings.Bitrate)
+			if err != nil {
+				return nil, nil, err
+			}
+			return &pluginapi.Stream{Type: "mp3", Level: "exhigh"}, hlsSource{h}, nil
+		},
 		Segments: func(ctx context.Context, tr *pluginapi.Track, advanced bool) (*pluginapi.Stream, pluginapi.SegmentedSource, error) {
 			client := s.Client()
 			if client == nil {

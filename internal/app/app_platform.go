@@ -97,6 +97,12 @@ func (a *app) configurePlatformPlayer() {
 		}
 		return nil, nil, nil
 	}
+	a.pl.ResolveCastSource = func(ctx context.Context, tr *pluginapi.Track, format string) (*pluginapi.Stream, pluginapi.SegmentedSource, error) {
+		if load := a.playbackMedia(tr).CastSource; load != nil {
+			return load(ctx, tr, format)
+		}
+		return nil, nil, nil
+	}
 	a.pl.Started = func(tr *pluginapi.Track) {
 		if report := a.playbackMedia(tr).Started; report != nil {
 			report(tr)

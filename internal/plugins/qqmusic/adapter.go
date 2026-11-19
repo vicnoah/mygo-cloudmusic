@@ -79,6 +79,16 @@ func (a *Adapter) PlaybackMedia() pluginapi.PlaybackMedia {
 			}
 			return &pluginapi.Stream{URL: s.URL, Size: s.Size, Type: s.Type, Level: s.Level, Gain: s.Gain, Peak: s.Peak}, nil
 		},
+		CastSource: func(ctx context.Context, tr *pluginapi.Track, format string) (*pluginapi.Stream, pluginapi.SegmentedSource, error) {
+			if format != "mp3" {
+				return nil, nil, nil
+			}
+			st, err := backend.SongURL(ctx, tr.ID, "exhigh")
+			if err != nil {
+				return nil, nil, err
+			}
+			return &pluginapi.Stream{URL: st.URL, Type: st.Type, Level: st.Level, Size: st.Size}, nil, nil
+		},
 		Cover: func(ctx context.Context, tr *pluginapi.Track) ([]byte, error) {
 			return backend.Fetch(ctx, backend.Sized(tr.Album.PicURL, 600))
 		},

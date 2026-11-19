@@ -33,6 +33,9 @@ type Device struct {
 	rcOnce  sync.Once
 	avCtrl  string
 	avEvent string
+	capMu   sync.Mutex
+	capAt   time.Time
+	caps    AudioCapabilities
 }
 
 // retryHandler retries transient SOAP failures up to 3 times, matching Supersonic's resilience pattern.
@@ -68,7 +71,7 @@ func (h *retryHandler) Do(req *http.Request) (*http.Response, error) {
 			newReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		}
 		resp, lastErr = h.client.Do(newReq)
-		if lastErr == nil && resp != nil && resp.StatusCode < 500 {
+		if lastErr == nil && resp != nil && (resp.StatusCode < 500 || attempt == 2) {
 			return resp, nil
 		}
 		if resp != nil {
@@ -265,14 +268,15 @@ func Discover(ctx context.Context, waitSec int) ([]*Device, error) {
 			}
 			req.Header.Set("Connection", "close")
 			resp, err := httpClient.Do(req)
-			cancelReq()
 			if err != nil {
+				cancelReq()
 				continue
 			}
 
 			var root rootXML
-			decodeErr := xml.NewDecoder(resp.Body).Decode(&root)
+			decodeErr := xml.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&root)
 			resp.Body.Close()
+			cancelReq()
 			if decodeErr != nil {
 				continue
 			}
@@ -321,19 +325,10 @@ func (d *Device) Play(ctx context.Context) error {
 	if d.av == nil {
 		return errors.New("dlna: av transport client not available")
 	}
-	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		err = d.av.Play(ctx)
-		if err == nil {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(300 * time.Millisecond):
-		}
+	if d.avCtrl == "" {
+		return d.av.Play(ctx)
 	}
-	return err
+	return soapRead(ctx, d.avCtrl, avTransport, "Play", "<InstanceID>0</InstanceID><Speed>1</Speed>", d.av.RequestHandler, nil)
 }
 
 // Pause pauses playback on the device.
@@ -472,14 +467,11 @@ func (d *Device) setNextAVTransportMediaEnhanced(ctx context.Context, item *avtr
 
 // PositionInfo fetches current playback position and duration.
 func (d *Device) PositionInfo(ctx context.Context) (pos, dur time.Duration, err error) {
-	if d.av == nil {
-		return 0, 0, errors.New("dlna: av transport client not available")
+	info, err := d.readPosition(ctx)
+	if err == nil && !info.Known {
+		err = errors.New("设备没有返回有效的播放位置")
 	}
-	info, err := d.av.GetPositionInfo(ctx)
-	if err != nil {
-		return 0, 0, err
-	}
-	return info.RelTime, info.Duration, nil
+	return info.Position, info.Duration, err
 }
 
 // TransportState returns the current playback state (e.g. "PLAYING", "PAUSED_PLAYBACK", "STOPPED").

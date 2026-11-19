@@ -395,7 +395,7 @@ func (a *app) playerBar(c *ui.Context) {
 					case a.picked.id == tr.ID:
 						sub = a.picked.heard
 					case pl.Loading():
-						sub = "正在缓冲…"
+						sub = pluginapi.PlaybackLoadingText(pl)
 					case pl.Err() != "":
 						sub, color = pl.Err(), p.accent
 					}

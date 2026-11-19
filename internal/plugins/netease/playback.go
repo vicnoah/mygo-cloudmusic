@@ -21,6 +21,13 @@ func (p *adapter) PlaybackMedia() pluginapi.PlaybackMedia {
 		Stream: func(ctx context.Context, tr *pluginapi.Track, level string) (*pluginapi.Stream, error) {
 			return netease.SongURL(ctx, tr.ID, level)
 		},
+		CastSource: func(ctx context.Context, tr *pluginapi.Track, format string) (*pluginapi.Stream, pluginapi.SegmentedSource, error) {
+			if format != "mp3" {
+				return nil, nil, nil
+			}
+			st, err := netease.SongURL(ctx, tr.ID, "standard")
+			return st, nil, err
+		},
 		Cover: func(ctx context.Context, tr *pluginapi.Track) ([]byte, error) {
 			return netease.Fetch(ctx, netease.Sized(tr.Album.PicURL, 600))
 		},

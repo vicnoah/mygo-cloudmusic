@@ -79,14 +79,15 @@ type PlatformPlayer struct {
 	loadContext context.Context
 	cancelLoad  context.CancelFunc
 
-	ResolveStream    func(context.Context, *pluginapi.Track, string) (*pluginapi.Stream, error)
-	ArtworkURL       func(*pluginapi.Track) string
-	Artwork          func(context.Context, *pluginapi.Track) ([]byte, error)
-	ResolveLyrics    func(context.Context, *pluginapi.Track) (string, string, string, error)
-	ResolveSegments  func(context.Context, *pluginapi.Track, bool) (*pluginapi.Stream, pluginapi.SegmentedSource, error)
-	TrackPreferences func(*pluginapi.Track) pluginapi.AudioPreferences
-	StreamError      func(*pluginapi.Track, error) string
-	Started          func(*pluginapi.Track)
+	ResolveStream     func(context.Context, *pluginapi.Track, string) (*pluginapi.Stream, error)
+	ArtworkURL        func(*pluginapi.Track) string
+	Artwork           func(context.Context, *pluginapi.Track) ([]byte, error)
+	ResolveLyrics     func(context.Context, *pluginapi.Track) (string, string, string, error)
+	ResolveCastSource func(context.Context, *pluginapi.Track, string) (*pluginapi.Stream, pluginapi.SegmentedSource, error)
+	ResolveSegments   func(context.Context, *pluginapi.Track, bool) (*pluginapi.Stream, pluginapi.SegmentedSource, error)
+	TrackPreferences  func(*pluginapi.Track) pluginapi.AudioPreferences
+	StreamError       func(*pluginapi.Track, error) string
+	Started           func(*pluginapi.Track)
 }
 
 func (p *Player) trackContext() context.Context {

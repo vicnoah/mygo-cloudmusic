@@ -380,7 +380,7 @@ func (h *Home) playerBar(c *ui.Context) {
 					color := p.muted
 					switch {
 					case pl.Loading():
-						sub = "正在缓冲…"
+						sub = pluginapi.PlaybackLoadingText(pl)
 					case pl.Err() != "":
 						sub, color = pl.Err(), p.accent
 					}

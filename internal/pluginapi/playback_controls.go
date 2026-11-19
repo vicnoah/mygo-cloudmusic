@@ -46,6 +46,14 @@ type PlaybackControls interface {
 	EndRadio()
 }
 
+// PlaybackLoadingText describes preparation if the host provides more detail.
+func PlaybackLoadingText(p PlaybackControls) string {
+	if detail, ok := p.(interface{ LoadingText() string }); ok {
+		return detail.LoadingText()
+	}
+	return "正在缓冲…"
+}
+
 // DecodedArtwork keeps the cover and its blurred bitmap alive while displayed.
 type DecodedArtwork interface {
 	Bitmap() *ui.Bitmap

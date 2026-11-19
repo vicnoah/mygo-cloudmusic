@@ -116,6 +116,17 @@ func (a *Adapter) PlaybackMedia() pluginapi.PlaybackMedia {
 			}
 			return provider.Stream(ctx, tr)
 		},
+		CastSource: func(ctx context.Context, tr *pluginapi.Track, format string) (*pluginapi.Stream, pluginapi.SegmentedSource, error) {
+			if format != "" && format != "mp3" {
+				return nil, nil, nil
+			}
+			provider := s.Provider()
+			if provider == nil {
+				return nil, nil, backend.ErrSignedOut
+			}
+			st, err := provider.CastStream(ctx, tr, format)
+			return st, nil, err
+		},
 		Cover: func(ctx context.Context, tr *pluginapi.Track) ([]byte, error) {
 			provider := s.Provider()
 			if provider == nil {

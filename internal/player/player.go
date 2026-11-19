@@ -95,6 +95,7 @@ type Player struct {
 	mpvCfg   mpv.Config
 	mpvOut   *mpv.Engine
 	dlnaCtrl *dlna.Controller
+	cast     *castPlayback
 
 	// rgDB is the replaygain preamp last set on mpvOut, and rgSet whether
 	// one was: changing the volume need not set it again.
@@ -112,7 +113,7 @@ type Player struct {
 
 func New(post func(func())) *Player {
 	p := &Player{post: post, at: -1, volume: 0.8, gain: 1}
-	if ctrl, err := dlna.NewController(func() { p.post(p.sync) }); err == nil {
+	if ctrl, err := dlna.NewController(func() { p.post(p.castChanged) }); err == nil {
 		p.dlnaCtrl = ctrl
 	}
 	// Music, mixed far enough ahead to play on while macOS keeps the app
@@ -122,7 +123,7 @@ func New(post func(func())) *Player {
 	mygo.NowPlaying.OnCommand(func(cmd mygo.MediaCommand, pos time.Duration) {
 		switch cmd {
 		case mygo.MediaPlay, mygo.MediaPause:
-			if (cmd == mygo.MediaPlay) != p.playing {
+			if (cmd == mygo.MediaPlay) != p.castWantsPlay() {
 				p.TogglePlay()
 			}
 		case mygo.MediaNext:
@@ -147,7 +148,7 @@ func (p *Player) sync() {
 		return
 	}
 	state := mygo.PlaybackPaused
-	if p.playing {
+	if p.Playing() {
 		state = mygo.PlaybackPlaying
 	}
 	mygo.NowPlaying.SetPlayback(state, p.Position())
@@ -156,7 +157,7 @@ func (p *Player) sync() {
 // announce shows the system the track, and its cover once loaded.
 func (p *Player) announce(t *pluginapi.Track, artwork []byte) {
 	state := mygo.PlaybackPaused
-	if p.playing {
+	if p.Playing() {
 		state = mygo.PlaybackPlaying
 	}
 	mygo.NowPlaying.Set(mygo.NowPlayingInfo{
@@ -173,6 +174,10 @@ func (p *Player) announce(t *pluginapi.Track, artwork []byte) {
 
 func (p *Player) ended() {
 	if p.repeat == RepeatOne {
+		if p.IsCasting() {
+			p.load(p.at)
+			return
+		}
 		p.out.Seek(0)
 		p.out.Play()
 		return
@@ -362,19 +367,36 @@ func (p *Player) Current() *pluginapi.Track { return p.track }
 // Queue returns the tracks queued, in the order they were given.
 func (p *Player) Queue() []pluginapi.Track { return p.queue }
 
-// Playing reports what the listener wants: false while paused.
-func (p *Player) Playing() bool { return p.playing }
+// Playing reports the renderer state during a cast and playback intent locally.
+func (p *Player) Playing() bool {
+	if p.IsCasting() {
+		return p.dlnaCtrl.CastStatus().Playing
+	}
+	return p.playing
+}
 
 // Loading reports whether the current track is still loading.
-func (p *Player) Loading() bool { return p.loading || p.awaiting }
+func (p *Player) Loading() bool {
+	return p.loading || p.awaiting || (p.IsCasting() && p.dlnaCtrl.CastStatus().Loading)
+}
 
 // Ready reports whether the current track has loaded, to play.
 func (p *Player) Ready() bool {
-	return p.out != nil || p.mpvOut != nil || p.IsCasting()
+	if p.IsCasting() {
+		return p.cast != nil && p.dlnaCtrl.CastStatus().Ready
+	}
+	return p.out != nil || p.mpvOut != nil
 }
 
 // Err returns why the current track did not play, or "".
-func (p *Player) Err() string { return p.err }
+func (p *Player) Err() string {
+	if p.IsCasting() && p.cast != nil {
+		if status := p.dlnaCtrl.CastStatus(); status.ID == p.cast.id && status.Err != nil {
+			return status.Err.Error()
+		}
+	}
+	return p.err
+}
 
 // Stream returns what the current track streams, once loaded, or nil.
 func (p *Player) Stream() *pluginapi.Stream { return p.info }
@@ -472,17 +494,17 @@ func (p *Player) SwitchOutput(devID string) {
 	if p.dlnaCtrl == nil {
 		return
 	}
-	wasCasting := p.IsCasting()
-	pos := p.Position()
-	playing := p.playing
-	at := p.at
-
-	// Stop previous output before selecting the new device target
-	if !wasCasting {
-		p.stop()
+	active := p.dlnaCtrl.ActiveDevice()
+	if (active == nil && devID == "") || (active != nil && active.ID == devID) {
+		return
 	}
-
-	_ = p.dlnaCtrl.SelectDevice(devID)
+	pos := p.Position()
+	playing, at := p.castWantsPlay(), p.at
+	if err := p.dlnaCtrl.SelectDevice(devID); err != nil {
+		p.err = err.Error()
+		p.sync()
+		return
+	}
 
 	if p.track == nil || p.at < 0 {
 		p.sync()
@@ -548,18 +570,7 @@ func (p *Player) MPVReady() bool {
 // TogglePlay pauses, fading out, or plays, fading in.
 func (p *Player) TogglePlay() {
 	if p.IsCasting() {
-		if p.track == nil {
-			return
-		}
-		ctx := p.trackContext()
-		if p.playing {
-			p.playing = false
-			_ = p.dlnaCtrl.Pause(ctx)
-		} else {
-			p.playing = true
-			_ = p.dlnaCtrl.Resume(ctx)
-		}
-		p.sync()
+		p.toggleCast()
 		return
 	}
 	if p.mpvOut != nil {
@@ -633,7 +644,11 @@ func (p *Player) Seek(t time.Duration) {
 		if p.track == nil {
 			return
 		}
-		_ = p.dlnaCtrl.Seek(p.trackContext(), t)
+		if status := p.dlnaCtrl.CastStatus(); p.cast != nil && status.ID == p.cast.id {
+			_ = p.dlnaCtrl.Seek(p.trackContext(), t)
+		} else {
+			p.pending = t
+		}
 		p.sync()
 		return
 	}
@@ -730,8 +745,10 @@ func (p *Player) Position() time.Duration {
 	case p.seeking:
 		return p.seekTo
 	case p.IsCasting():
-		_, pos, _ := p.dlnaCtrl.Status()
-		return pos
+		if status := p.dlnaCtrl.CastStatus(); p.cast != nil && status.ID == p.cast.id {
+			return status.Position
+		}
+		return p.pending
 	case p.loading:
 		return p.pending
 	case p.mpvOut != nil:
@@ -743,14 +760,13 @@ func (p *Player) Position() time.Duration {
 }
 
 func (p *Player) Duration() time.Duration {
+	if p.IsCasting() {
+		if status := p.dlnaCtrl.CastStatus(); p.cast != nil && status.ID == p.cast.id && status.Duration > 0 {
+			return status.Duration
+		}
+	}
 	if p.track != nil && p.track.Length() > 0 {
 		return p.track.Length()
-	}
-	if p.IsCasting() {
-		_, _, dur := p.dlnaCtrl.Status()
-		if dur > 0 {
-			return dur
-		}
 	}
 	if p.mpvOut != nil {
 		if d := p.mpvOut.Duration(); d > 0 {
@@ -771,6 +787,13 @@ func (p *Player) Levels() ([Bands]float32, bool) {
 }
 
 func (p *Player) stop() {
+	if p.cast != nil {
+		p.dlnaCtrl.Stop()
+		if p.cast.release != nil {
+			p.cast.release()
+		}
+		p.cast = nil
+	}
 	if p.cancelLoad != nil {
 		p.cancelLoad()
 		p.cancelLoad = nil
@@ -813,22 +836,23 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 	p.announce(&t, nil)
 	p.refill()
 
-	var castCover chan []byte
-	if p.IsCasting() && needsResolvedCover(&t) {
-		castCover = make(chan []byte, 1)
+	if p.IsCasting() {
+		p.cast = &castPlayback{id: p.castTrackID(&t, gen, at)}
 	}
+
 	go func() {
 		cover, err := p.resolveArtwork(ctx, &t)
 		if err != nil {
 			cover = nil
 		}
-		if castCover != nil {
-			castCover <- cover
-		}
 		if err == nil {
 			p.post(func() {
 				if gen == p.gen && ctx.Err() == nil {
 					p.announce(&t, cover)
+					if p.cast != nil {
+						p.cast.cover = cover
+						p.dlnaCtrl.UpdateCover(p.cast.id, cover)
+					}
 				}
 			})
 		}
@@ -848,17 +872,19 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 		})
 	}()
 	level := p.playbackPreferences(&t).Quality
-	direct := p.UsingMPV() || p.IsCasting()
+	if p.cast != nil {
+		p.loading = false
+		if p.playing {
+			p.loadCast(ctx, t, level, false)
+		} else {
+			p.sync()
+		}
+		return
+	}
+	direct := p.UsingMPV()
 	go func() {
 		media, err := p.open(ctx, t, level, direct)
 		info, s := media.info, media.decoded
-		var coverData []byte
-		if err == nil && castCover != nil {
-			select {
-			case coverData = <-castCover:
-			case <-ctx.Done():
-			}
-		}
 		if ctx.Err() != nil {
 			if s != nil {
 				s.Close()
@@ -901,65 +927,6 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 			fadeLevel := 1.0
 			if p.pending > 0 {
 				fadeLevel = 0
-			}
-
-			// 1. DLNA target active: stream via local proxy to remote device.
-			if p.IsCasting() {
-				if s != nil {
-					s.Close()
-				}
-				headers := http.Header{}
-				if info.Header != nil {
-					headers = info.Header()
-				}
-				sampleRate := 44100
-				bitsPerSample := 16
-				if info.Level == "hires" {
-					sampleRate = 96000
-					bitsPerSample = 24
-				}
-				bitrate := 0
-				durSec := int64(t.Length().Seconds())
-				if durSec > 0 && info.Size > 0 {
-					bitrate = int(info.Size / durSec)
-				}
-				trackID := p.castTrackID(&t, gen, at)
-				meta := dlna.TrackMeta{
-					ID:              trackID,
-					Title:           t.Name,
-					Artist:          t.ArtistNames(),
-					Album:           t.Album.Name,
-					CoverURL:        p.coverURL(&t),
-					CoverData:       coverData,
-					StreamURL:       info.URL,
-					LocalFile:       media.localFile,
-					Format:          info.Type,
-					Duration:        t.Length(),
-					Size:            info.Size,
-					Bitrate:         bitrate,
-					SampleFrequency: sampleRate,
-					BitsPerSample:   bitsPerSample,
-					Channels:        2,
-					Headers:         headers,
-				}
-				p.dlnaCtrl.OnEnd(func() {
-					p.post(func() {
-						if gen == p.gen && ctx.Err() == nil && p.IsCasting() {
-							p.ended()
-						}
-					})
-				})
-				if err := p.dlnaCtrl.PlayTrack(ctx, meta, p.pending); err != nil {
-					p.err = fmt.Sprintf("无线投送失败: %v", err)
-					p.playing = false
-					p.sync()
-					return
-				}
-				p.pending = 0
-				p.markStarted()
-				p.sync()
-				p.prefetchNextDLNA(at)
-				return
 			}
 
 			// 2. High-quality MPV engine active.
@@ -1111,93 +1078,6 @@ func (p *Player) prefetchNextMPV(at, gen int) {
 	}()
 }
 
-// prefetchNextDLNA resolves and stages the next track to the DLNA renderer for gapless playback.
-func (p *Player) prefetchNextDLNA(at int) {
-	if !p.IsCasting() || p.repeat == RepeatOne || p.dlnaCtrl == nil {
-		return
-	}
-	nextAt := at + 1
-	if nextAt >= len(p.order) {
-		if p.repeat == RepeatAll {
-			nextAt = 0
-		} else {
-			return
-		}
-	}
-	if nextAt >= len(p.order) {
-		return
-	}
-	nextTrack := p.queue[p.order[nextAt]]
-	ctx, level := p.loadContext, p.playbackPreferences(&nextTrack).Quality
-	trackID := p.castTrackID(&nextTrack, p.gen, nextAt) + "-next"
-	go func() {
-		// Delay staging the next track by 6 seconds so the DMR establishes its primary playback stream
-		// without receiving conflicting UPnP pipeline commands during startup (fixing XiaoAi / XiaoMing DMR startup stall).
-		timer := time.NewTimer(6 * time.Second)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-		}
-		if !p.IsCasting() {
-			return
-		}
-
-		media, ok := p.openNextOutput(ctx, nextTrack, level)
-		if !ok {
-			return
-		}
-		info := media.info
-		headers := http.Header{}
-		if info.Header != nil {
-			headers = info.Header()
-		}
-		sampleRate := 44100
-		bitsPerSample := 16
-		if info.Level == "hires" {
-			sampleRate = 96000
-			bitsPerSample = 24
-		}
-		bitrate := 0
-		durSec := int64(nextTrack.Length().Seconds())
-		if durSec > 0 && info.Size > 0 {
-			bitrate = int(info.Size / durSec)
-		}
-		var coverData []byte
-		if needsResolvedCover(&nextTrack) {
-			if b, err := p.resolveArtwork(ctx, &nextTrack); err == nil && len(b) > 0 {
-				coverData = b
-			}
-		}
-		meta := dlna.TrackMeta{
-			ID:              trackID,
-			Title:           nextTrack.Name,
-			Artist:          nextTrack.ArtistNames(),
-			Album:           nextTrack.Album.Name,
-			CoverURL:        p.coverURL(&nextTrack),
-			CoverData:       coverData,
-			StreamURL:       info.URL,
-			LocalFile:       media.localFile,
-			Format:          info.Type,
-			Duration:        nextTrack.Length(),
-			Size:            info.Size,
-			Bitrate:         bitrate,
-			SampleFrequency: sampleRate,
-			BitsPerSample:   bitsPerSample,
-			Channels:        2,
-			Headers:         headers,
-		}
-		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		defer cancel()
-		_ = p.dlnaCtrl.SetNextTrack(ctx, meta)
-	}()
-}
-
-func needsResolvedCover(t *pluginapi.Track) bool {
-	return t.Source != "" || (t.Album.PicURL != "" && !strings.HasPrefix(t.Album.PicURL, "http"))
-}
-
 func (p *Player) playbackPreferences(track *pluginapi.Track) pluginapi.AudioPreferences {
 	if p.TrackPreferences != nil && track != nil {
 		return p.TrackPreferences(track)
@@ -1260,6 +1140,10 @@ func (p *Player) open(ctx context.Context, t pluginapi.Track, level string, dire
 	if info, decoded, err, handled := p.resolveAudio(ctx, &t, direct); handled {
 		return playbackSource{info: info, decoded: decoded}, err
 	}
+	return p.openOrdinary(ctx, t, level, direct)
+}
+
+func (p *Player) openOrdinary(ctx context.Context, t pluginapi.Track, level string, direct bool) (playbackSource, error) {
 	ref := trackCacheRef(p.trackOwner(&t), &t)
 	dl, info, ok := p.Cache.lookup(ref, level)
 	if !ok {

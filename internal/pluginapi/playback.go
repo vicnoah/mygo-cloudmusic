@@ -25,6 +25,12 @@ type PlaybackMedia struct {
 	Lyrics      func(context.Context, *Track) (string, string, string, error)
 	Started     func(*Track)
 
+	// CastSource optionally requests an output-specific source. An empty format
+	// asks for any custom source selected by the platform preferences. Returning
+	// no source lets the host use the normal URL, or report that a requested
+	// compatible format is unavailable. The host does not encode audio.
+	CastSource func(context.Context, *Track, string) (*Stream, SegmentedSource, error)
+
 	// ErrorMessage optionally describes a failed stream in the platform's terms.
 	ErrorMessage func(*Track, error) string
 

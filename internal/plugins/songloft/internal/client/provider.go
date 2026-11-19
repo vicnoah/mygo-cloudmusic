@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -426,6 +427,26 @@ func (p *Provider) Stream(ctx context.Context, tr *pluginapi.Track) (*pluginapi.
 		URL:  cli.StreamURL(songID),
 		Type: streamType,
 	}, nil
+}
+
+// CastStream uses Songloft's compatibility option on the existing play endpoint.
+func (p *Provider) CastStream(ctx context.Context, tr *pluginapi.Track, format string) (*pluginapi.Stream, error) {
+	st, err := p.Stream(ctx, tr)
+	if err != nil {
+		return nil, err
+	}
+	if format != "mp3" {
+		return nil, nil
+	}
+	u, err := url.Parse(st.URL)
+	if err != nil {
+		return nil, err
+	}
+	q := u.Query()
+	q.Set("format", format)
+	u.RawQuery = q.Encode()
+	st.URL, st.Type = u.String(), format
+	return st, nil
 }
 
 func (p *Provider) Lyrics(ctx context.Context, tr *pluginapi.Track) (platform.Lyrics, error) {
