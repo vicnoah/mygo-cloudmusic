@@ -1,18 +1,27 @@
 package player
 
 import (
+	"context"
+
+	"github.com/egoist/mygo"
 	"os"
 	"testing"
 	"time"
 
-	"netease-music-mygo/internal/netease"
+	"waygu-music/internal/pluginapi"
+	"waygu-music/internal/plugins/netease"
 )
 
 func TestStreamLive(t *testing.T) {
 	if os.Getenv("LIVE") == "" {
 		t.Skip()
 	}
-	st, err := netease.SongURL(2652820720, "exhigh")
+	plugin := netease.Start(pluginapi.Startup{
+		RegisterWindow:    func(pluginapi.WindowID, pluginapi.Window) {},
+		RegisterMenu:      func(pluginapi.MenuID, func() *mygo.Menu) {},
+		RegisterLifecycle: func(pluginapi.Lifecycle) {},
+	})
+	st, err := plugin.PlaybackMedia().Stream(context.Background(), &pluginapi.Track{ID: 2652820720}, "exhigh")
 	if err != nil {
 		t.Fatal(err)
 	}

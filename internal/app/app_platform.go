@@ -2,13 +2,9 @@ package app
 
 import (
 	"context"
-	"sort"
-	"time"
 
-	appplatform "netease-music-mygo/internal/app/platform"
-	"netease-music-mygo/internal/netease"
-	"netease-music-mygo/internal/platform"
-	"netease-music-mygo/internal/player"
+	"waygu-music/internal/pluginapi"
+	"waygu-music/internal/pluginapi/network"
 )
 
 // Platform extension seam.
@@ -18,269 +14,170 @@ import (
 // provider adapter directory. Changes to the upstream app should use this
 // seam instead of adding provider-specific fields or branches.
 
-func (a *app) activePlatform() appplatform.Adapter {
+func (a *app) activePlatform() pluginapi.Adapter {
 	if a == nil || a.platforms == nil {
 		return nil
 	}
 	return a.platforms[a.platformID]
 }
 
-func (a *app) initPlatformState() {
+func (a *app) initPlatformState() bool {
 	newPlatformAdapters(a)
-	if a.settings.Platform == "" {
-		a.settings.Platform = string(platform.FnmusicID)
+	id := pluginapi.ID(a.settings.Platform)
+	if !a.hasPlatform(id) {
+		id = ""
+		for _, entry := range a.platformRegistrations {
+			if !a.hasPlatform(entry.ID) {
+				continue
+			}
+			if a.settings.DeveloperMode || !entry.DeveloperOnly {
+				id = entry.ID
+				break
+			}
+			if id == "" {
+				id = entry.ID
+			}
+		}
 	}
-	a.platformID = platform.ID(a.settings.Platform)
-	if !a.hasPlatform(a.platformID) {
-		a.platformID = platform.FnmusicID
-		a.settings.Platform = string(platform.FnmusicID)
+	a.platformID = id
+	if id == "" {
+		return false
 	}
+	a.settings.Platform = string(id)
+	return true
 }
 
 func (a *app) configurePlatformPlayer() {
 	if a.art != nil {
-		a.art.fetch = platformHost{a: a}.FetchArtwork
+		a.art.fetch = func() func(string) ([]byte, error) {
+			owner, ctx := a.platformID, a.platformContext
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			return func(url string) ([]byte, error) {
+				return (platformHost{a: a}).fetchArtwork(ctx, owner, url)
+			}
+		}
 		a.art.generation = func() uint64 { return a.platformGeneration }
 	}
 	if a.pl == nil {
 		return
 	}
-	// Player hooks belong to the active platform only. Clearing the embedded
-	// seam first prevents a previous provider from handling a later platform's
-	// track after a switch.
-	a.pl.PlatformPlayer = player.PlatformPlayer{}
-	// Quality and normalisation follow the active platform's own settings:
-	// QQ keeps them in its namespace, the others keep the shared ones.
-	if a.platformID == platform.QQMusicID {
-		a.pl.Quality, a.pl.Normalize = a.qualityLevel, a.normalizeEnabled
-	} else {
-		a.pl.Quality = func() string { return a.settings.Quality }
-		a.pl.Normalize = func() bool { return a.settings.Normalize }
+	a.pl.Quality = func() string { return a.playbackPreferences(nil).Quality }
+	a.pl.Normalize = func() bool { return a.playbackPreferences(nil).Normalize }
+	a.pl.TrackPreferences = a.playbackPreferences
+	a.pl.TrackPlatform = func(track *pluginapi.Track) pluginapi.ID {
+		id, _ := a.trackPlatform(track)
+		return id
 	}
-	if adapter := a.activePlatform(); adapter != nil {
-		adapter.ConfigurePlayer(a.pl)
+	a.pl.ArtworkURL = func(tr *pluginapi.Track) string {
+		return network.SizedArtworkURL(tr.Album.PicURL, 600)
+	}
+	a.pl.ResolveStream = func(ctx context.Context, tr *pluginapi.Track, level string) (*pluginapi.Stream, error) {
+		if load := a.playbackMedia(tr).Stream; load != nil {
+			return load(ctx, tr, level)
+		}
+		return nil, pluginapi.ErrUnavailable
+	}
+	a.pl.Artwork = func(ctx context.Context, tr *pluginapi.Track) ([]byte, error) {
+		if load := a.playbackMedia(tr).Cover; load != nil {
+			return load(ctx, tr)
+		}
+		return nil, pluginapi.ErrUnavailable
+	}
+	a.pl.ResolveLyrics = func(ctx context.Context, tr *pluginapi.Track) (string, string, string, error) {
+		if load := a.playbackMedia(tr).Lyrics; load != nil {
+			return load(ctx, tr)
+		}
+		return "", "", "", pluginapi.ErrUnavailable
+	}
+	a.pl.ResolveSegments = func(ctx context.Context, tr *pluginapi.Track, advanced bool) (*pluginapi.Stream, pluginapi.SegmentedSource, error) {
+		if load := a.playbackMedia(tr).Segments; load != nil {
+			return load(ctx, tr, advanced)
+		}
+		return nil, nil, nil
+	}
+	a.pl.Started = func(tr *pluginapi.Track) {
+		if report := a.playbackMedia(tr).Started; report != nil {
+			report(tr)
+		}
+	}
+	a.pl.StreamError = func(tr *pluginapi.Track, err error) string {
+		if describe := a.playbackMedia(tr).ErrorMessage; describe != nil {
+			return describe(tr, err)
+		}
+		return ""
 	}
 }
 
-func (a *app) startPlatform() {
-	if a.platforms == nil {
-		a.initPlatformState()
-		a.configurePlatformPlayer()
+func (a *app) playbackPreferences(track *pluginapi.Track) pluginapi.AudioPreferences {
+	adapter := a.activePlatform()
+	if track != nil {
+		adapter = a.trackAdapter(track)
 	}
-	if a.platformID == platform.NeteaseID {
-		a.boot()
-	} else {
-		a.homeLoading = false
-	}
-	if a.activeHome() == nil {
-		return
-	}
-	rt := a.activeRuntime()
-	if rt == nil || !rt.Configured() {
-		return
-	}
-	currentPlatform := a.platformID
-	go func() {
-		var err error
-		// Try up to 3 times on cold start with exponential backoff for network wake-up
-		delays := []time.Duration{0, 1500 * time.Millisecond, 3000 * time.Millisecond}
-		for i, delay := range delays {
-			if delay > 0 {
-				time.Sleep(delay)
-			}
-			if a.platformID != currentPlatform {
-				return
-			}
-			err = rt.Connect(context.Background(), rt.Config())
-			if err == nil || err == context.Canceled {
-				return
-			}
-			if i < len(delays)-1 {
-				continue
-			}
+	if adapter != nil {
+		if prefs := adapter.PlaybackMedia().Preferences; prefs != nil {
+			return prefs()
 		}
-		a.post(func() {
-			if a.platformID == currentPlatform && err != nil && err != context.Canceled {
-				a.toast = err.Error()
-			}
-		})
-	}()
+	}
+	return pluginapi.AudioPreferences{Quality: a.settings.Quality, Normalize: a.settings.Normalize}
 }
 
-func (a *app) activeHome() appplatform.Home {
-	if p := a.activePlatform(); p != nil {
-		return p.Home()
+func (a *app) playbackMedia(tr *pluginapi.Track) pluginapi.PlaybackMedia {
+	if tr == nil {
+		return pluginapi.PlaybackMedia{}
 	}
-	return nil
+	if adapter := a.trackAdapter(tr); adapter != nil {
+		return adapter.PlaybackMedia()
+	}
+	return pluginapi.PlaybackMedia{}
 }
 
-func (a *app) activeRuntime() appplatform.Runtime {
-	if p := a.activePlatform(); p != nil {
-		return p.Runtime()
+func (a *app) platformReady(coldStart bool) {
+	if ready := a.platformLifecycles[a.platformID].Ready; ready != nil {
+		ready(pluginapi.Activation{Context: a.platformContext, Main: a.win, ColdStart: coldStart})
 	}
-	return nil
 }
 
-var platformOrder = map[platform.ID]int{
-	platform.FnmusicID:   0,
-	platform.NavidromeID: 1,
-	platform.JellyfinID:  2,
-	platform.GonicID:     3,
-	platform.SubsonicID:  4,
-	platform.SongloftID:  5,
-	platform.NeteaseID:   6,
-	platform.QQMusicID:   7,
+func (a *app) activatePlatformView() {
+	a.platformContext, a.cancelPlatform = context.WithCancel(context.Background())
+	if activate := a.platformLifecycles[a.platformID].Activate; activate != nil {
+		activate(a.platformContext, playbackContinuity{a: a, ctx: a.platformContext})
+	}
 }
 
-// platformInfos returns the identities available to the shared platform
-// selector in the canonical order. NetEase and QQ Music are visible only
-// when DeveloperMode is activated in settings.
-func (a *app) platformInfos() []appplatform.Info {
-	var infos []appplatform.Info
-	if a.settings.DeveloperMode {
-		infos = append(infos, neteasePlatformInfo())
+func (a *app) deactivatePlatformView(switching bool) {
+	if a.cancelPlatform != nil {
+		a.cancelPlatform()
 	}
-	for _, adapter := range a.platforms {
-		if adapter == nil {
-			continue
-		}
-		info := adapter.Info()
-		if info.ID == "" || info.ID == platform.NeteaseID {
-			continue
-		}
-		if info.ID == platform.QQMusicID && !a.settings.DeveloperMode {
-			continue
-		}
-		infos = append(infos, info)
+	if deactivate := a.platformLifecycles[a.platformID].Deactivate; deactivate != nil {
+		deactivate(switching)
 	}
-	orderOf := func(id platform.ID) int {
-		if order, ok := platformOrder[id]; ok {
-			return order
+}
+
+// platformInfos shows the plugins in registration order.
+func (a *app) platformInfos() []pluginapi.Info {
+	var infos []pluginapi.Info
+	for _, entry := range a.platformRegistrations {
+		if a.hasPlatform(entry.ID) && (!entry.DeveloperOnly || a.settings.DeveloperMode) {
+			infos = append(infos, entry.Info)
 		}
-		return 999
 	}
-	sort.SliceStable(infos, func(i, j int) bool {
-		oi, oj := orderOf(infos[i].ID), orderOf(infos[j].ID)
-		if oi != oj {
-			return oi < oj
-		}
-		return infos[i].Name < infos[j].Name
-	})
 	return infos
 }
 
-func neteasePlatformInfo() appplatform.Info {
-	return appplatform.Info{ID: platform.NeteaseID, Name: "网易云音乐", Comments: true, Podcasts: true, Quality: true, Normalize: true}
+func (a *app) hasPlatform(id pluginapi.ID) bool {
+	return id != "" && a.platforms[id] != nil && a.platformWindows[id][pluginapi.MainWindow].Root != nil
 }
 
-func (a *app) infoForPlatform(id platform.ID) appplatform.Info {
-	if id == platform.NeteaseID {
-		return neteasePlatformInfo()
-	}
-	if a != nil && a.platforms != nil {
-		if adapter := a.platforms[id]; adapter != nil {
-			return adapter.Info()
-		}
-	}
-	name := string(id)
-	switch id {
-	case platform.QQMusicID:
-		name = "QQ 音乐"
-	case platform.FnmusicID:
-		name = "飞牛音乐"
-	case platform.NavidromeID:
-		name = "Navidrome"
-	case platform.JellyfinID:
-		name = "Jellyfin"
-	case platform.GonicID:
-		name = "Gonic"
-	case platform.SubsonicID:
-		name = "Subsonic"
-	case platform.SongloftID:
-		name = "Songloft"
-	}
-	return appplatform.Info{ID: id, Name: name}
-}
-
-// platformAccent applies the active platform's brand colour, if it has one,
-// over the shared palette. NetEase keeps the palette's own red.
-// platformPage translates a shared page route to the active platform's, so
-// artist and album links inside shared rows open the platform's pages.
-func (a *app) platformPage(r route) (appplatform.Route, bool) {
-	if a.activePlatform() == nil || a.platformID == platform.NeteaseID {
-		return appplatform.Route{}, false
-	}
-	switch r.page {
-	case pageArtist:
-		return appplatform.Route{Page: "artist", ID: r.id, Kind: "artist"}, true
-	case pageAlbum:
-		return appplatform.Route{Page: "album", ID: r.id, Kind: "album"}, true
-	case pagePlaylist:
-		return appplatform.Route{Page: "playlist", ID: r.id, Kind: "playlist"}, true
-	case pageUser:
-		return appplatform.Route{Page: "user", ID: r.id}, true
-	case pageDaily:
-		return appplatform.Route{Page: "daily"}, true
-	case pageCharts:
-		return appplatform.Route{Page: "charts"}, true
-	case pageFM:
-		return appplatform.Route{Page: "fm"}, true
-	case pageSearch:
-		return appplatform.Route{Page: "search", Query: r.query}, true
-	}
-	return appplatform.Route{}, false
-}
-
-func (a *app) platformAccent(p *palette) {
-	if a == nil || p == nil {
-		return
-	}
-	if a.activePlatform() == nil {
-		return
-	}
-	if src, ok := a.activePlatform().(appplatform.Accent); ok {
-		p.accent, p.onAccent = src.AccentColor()
-	}
-}
-
-// platformComments returns the active platform's comment reader, if it has
-// one. NetEase keeps using the upstream loader.
-func (a *app) platformComments() appplatform.CommentSource {
-	if a == nil {
-		return nil
-	}
-	if p := a.activePlatform(); p != nil {
-		if src, ok := p.(appplatform.CommentSource); ok {
-			return src
-		}
-	}
-	return nil
-}
-
-func (a *app) commentsEnabled() bool {
-	if a == nil {
-		return true
-	}
-	if p := a.activePlatform(); p != nil {
-		return p.Info().Comments
-	}
-	return true
-}
-
-func (a *app) hasPlatform(id platform.ID) bool {
-	if id == platform.NeteaseID {
-		return true
-	}
-	_, ok := a.platforms[id]
-	return ok
-}
-
-func (a *app) trackPlatform(tr *netease.Track) (platform.ID, bool) {
+func (a *app) trackPlatform(tr *pluginapi.Track) (pluginapi.ID, bool) {
 	if tr == nil {
 		return "", false
 	}
-	if tr.Source == "" {
-		return platform.NeteaseID, true
+	// Sources that are also instance IDs must win over legacy source aliases.
+	id := pluginapi.ID(tr.Source)
+	if adapter := a.platforms[id]; adapter != nil && adapter.OwnsTrack(tr) {
+		return id, true
 	}
 	for id, adapter := range a.platforms {
 		if adapter != nil && adapter.OwnsTrack(tr) {
@@ -290,14 +187,9 @@ func (a *app) trackPlatform(tr *netease.Track) (platform.ID, bool) {
 	return "", false
 }
 
-func (a *app) trackAdapter(tr *netease.Track) appplatform.Adapter {
-	if tr == nil {
-		return nil
-	}
-	for _, adapter := range a.platforms {
-		if adapter != nil && adapter.OwnsTrack(tr) {
-			return adapter
-		}
+func (a *app) trackAdapter(tr *pluginapi.Track) pluginapi.Adapter {
+	if id, ok := a.trackPlatform(tr); ok {
+		return a.platforms[id]
 	}
 	return nil
 }

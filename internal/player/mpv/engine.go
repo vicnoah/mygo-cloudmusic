@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	eqpkg "netease-music-mygo/internal/eq"
+	eqpkg "waygu-music/internal/pluginapi/eq"
 )
 
 // AudioDevice describes an audio output device enumerated by MPV.

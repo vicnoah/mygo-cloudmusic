@@ -2,176 +2,49 @@ package app
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"os"
 	"runtime"
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
 
-	"netease-music-mygo/internal/netease"
-	"netease-music-mygo/internal/player"
+	"waygu-music/internal/player"
+	appplatform "waygu-music/internal/pluginapi"
 )
 
-type pageKind int
-
-const (
-	pageHome pageKind = iota
-	pageDaily
-	pageCharts
-	pagePlaylist
-	pageSearch
-	pageFM
-	pageArtist
-	pageAlbum
-	pageUser
-	pagePodcast
-	pagePodcasts
-)
-
-type route struct {
-	page pageKind
-	// id is the playlist, artist, album, user or podcast the page shows.
-	id int64
-	// query and kind are what a search page searched for.
-	query string
-	kind  netease.SearchType
-}
-
-// app is the state both windows show. Everything in it is read and changed
-// on the main thread: by the views, and by goroutines through post.
+// app owns the native windows and the services shared by platform plugins.
 type app struct {
-	win *mygo.Window
-	// desktopLyricsWin is the independent desktop-lyrics window.
-	desktopLyricsWin                          *mygo.Window
-	desktopLyricsLocked, desktopLyricsToolbar bool
-	desktopLyricsShowTranslation              bool
-	desktopLyricsFontSize                     float32
-	desktopLyricsColor                        int
-	desktopLyricsPoll                         *time.Timer
-	desktopLyricsTrackID                      int64
-	desktopLyricsShownAt                      int
-	desktopLyricsPreviousAt                   int
-	desktopLyricsScrollGeneration             int
-	notch                                     *notch
-	tray                                      *mygo.Tray // the icon in the menu bar or notification area, while it shows
-	desktopLyricsLockItem                     *mygo.MenuItem
-	art                                       *artCache
-	pl                                        *player.Player
-	pal                                       palette
+	win, settingsWin, desktopLyricsWin              *mygo.Window
+	desktopLyricsLocked, desktopLyricsPointerInside bool
+	desktopLyricsShowTranslation                    bool
+	desktopLyricsFontSize                           float32
+	desktopLyricsColor                              int
+	desktopLyricsPoll                               *time.Timer
+	desktopLyricsOffDisplays                        func()
+	desktopLyricsIgnoresMouse                       bool
+	tray                                            *mygo.Tray
+	art                                             *artCache
+	pl                                              *player.Player
+	toast                                           string
+	volume                                          float64
+	dlnaScanning                                    bool
+	mpvDownloading                                  bool
+	mpvDone, mpvTotal                               int64
+	mpvCancel                                       context.CancelFunc
+	quitting                                        bool
 
-	route   route
-	history []route
-	forward []route // the pages gone back from, the last first to go to
-
-	profile      *netease.Profile
-	mine, saved  []netease.Playlist // the listener's playlists: made, and saved
-	savingPl     map[int64]bool     // the playlists whose saving or its end is on its way
-	recPlaylists []netease.Playlist // the day's playlists picked for the listener
-	login        loginState
-	accountOpen  bool           // the dropdown of the account row shows
-	naming       nameDialog     // the name of a playlist asked for
-	deleting     deleteDialog   // whether to delete a playlist, asked
-	liked        map[int64]bool // the songs the listener likes
-	toast        string         // a message to show once
-	picked       pickedUp       // the song a login picked up, waiting to play
-
-	// The episodes the listener likes, and doesn't, as far as NetEase has
-	// answered, and those asked about: see ui_like.go.
-	likedPrograms, askedPrograms map[int64]bool
-
-	daily       []netease.Track
-	dailySpin   spinState // the record on the daily card
-	dailyBars   barState  // the bars on its play button
-	featured    []netease.Playlist
-	charts      []netease.Playlist
-	homeErr     string
-	homeLoading bool
-	homeAt      time.Time // when what the home page shows was asked for
-
-	playlists  map[int64]*netease.Playlist
-	loadingPl  map[int64]bool
-	plErr      map[int64]string
-	artists    map[int64]*artistData
-	artistTab  int // what an artist's page lists: artistHot, artistLatest, artistAlbums or artistEvents
-	albums     map[int64]*albumData
-	users      map[int64]*userData
-	podcasts   map[int64]*podcastData
-	podcastTab *podcastTab // the podcasts tab's lists
-	trackList  ui.ListState
-	// Where the page and the sidebar are scrolled, kept while Now Playing
-	// covers them, unbuilt.
-	pageScroll ui.ScrollState
-	navScroll  ui.ScrollState
-	scrolled   route // the page trackList and pageScroll are of
-
-	mineCollapsed, savedCollapsed bool
-
-	query       string
-	searchBox   ui.Handle
-	searches    map[route]*searchData // the results of each search, by its page
-	searched    route                 // the search last shown, which the sidebar goes back to
-	suggestions suggestState          // what the search field's query may be after
-
-	nowPlaying  bool
-	npOpen      bool      // Now Playing as it last showed: open or not
-	npChangedAt time.Time // when it last opened or closed
-	npPane      int       // paneLyrics, paneQueue, paneStage, paneComments, paneProgram or paneCaptions
-	npPaneTop   float32   // how far the cover beside the pane starts below its top
-	lyricScroll ui.ScrollState
-	lyricGlide  lyricGlide
-	lyricAt     int
-	lyricTrack  int64
-	queueList   ui.ListState
-	queueAt     int // the row of the queue pane last scrolled to, -1 while it is hidden
-	comments    commentState
-	tabCount    rollState // the count on the comments' tab, as it rolls
-
-	fmMode        int    // the FM mode chosen, in fmModes
-	radioStarting string // the radio asked for its first songs, or ""
-
-	scrub      float64
-	scrubbing  bool
-	volume     float64
-	volumeOpen bool // the volume popover of the player bar shows
-	mutedFrom  float64
-
-	rowBars barState
-	// underTop and underBottom say whether the page has content under its
-	// bars, which show their scroll edges then.
-	underTop, underBottom bool
-	barScrub              scrubState
-	npScrub               scrubState
-	backdropCache         backdropCache // the backdrop of Now Playing, as last painted
-	npArt                 *artwork      // the cover whose colors Now Playing shows
-	npCoverState          coverState    // the cover of Now Playing, as it is tilted and flicked
-	wallState             wallState     // the wall of the queue's covers, as it is dragged
-	quiet                 quietState    // the quiet parts of the song playing, for its hot comments
-	captions              captionState  // the episode playing's captions, and the model that writes them
-	castOpen              bool
-	eqOpen                bool
-	eqUI                  eqUIState
-	dlnaScanning          bool
-	mpvDownloading        bool
-	mpvDone               int64
-	mpvTotal              int64
-	mpvCancel             context.CancelFunc
-	sig                   playerSig
-	quitting              bool
-
-	settings    settings
-	settingsWin *mygo.Window
-	cacheUsed   int64 // the bytes the song cache takes, -1 until measured
-	updates     bool  // the update plugin is used (useUpdater)
-
+	settings     settings
+	cacheUsed    int64
+	updates      bool
 	devClicks    int
 	devClickTime time.Time
 
 	appPlatformState
 
-	restored     bool   // playback picked up where it was left
-	savedSession string // the session as last kept
-	sessionDue   bool   // a save of the session is due
+	restored     bool
+	savedSession string
+	sessionDue   bool
 }
 
 // post runs fn on the main thread and redraws both windows. Without a
@@ -193,13 +66,13 @@ func (a *app) redraw() {
 	if a.desktopLyricsWin != nil {
 		a.desktopLyricsWin.Invalidate()
 	}
-	if a.notch != nil && a.notch.win != nil {
-		a.notch.win.Invalidate()
+	for _, window := range a.mountedWindows {
+		if window.updated != nil {
+			window.updated()
+		}
+		window.native.Invalidate()
 	}
 }
-
-// shotHook, when set, drives the app to check its design.
-var shotHook func(a *app)
 
 func (a *app) showMain() {
 	if a.win != nil {
@@ -214,7 +87,7 @@ func (a *app) showMain() {
 }
 
 // Run runs the app until it quits.
-func Run() error {
+func Run(registrations []appplatform.Registration) error {
 	// Before the lock and anything that reads them: the app's folders are
 	// named in ASCII, though it calls itself 肥牛音乐.
 	useDataPaths()
@@ -224,82 +97,56 @@ func Run() error {
 	if !mygo.App.RequestSingleInstanceLock() {
 		return nil
 	}
-	a := &app{
-		playlists:  map[int64]*netease.Playlist{},
-		loadingPl:  map[int64]bool{},
-		plErr:      map[int64]string{},
-		artists:    map[int64]*artistData{},
-		albums:     map[int64]*albumData{},
-		users:      map[int64]*userData{},
-		podcasts:   map[int64]*podcastData{},
-		podcastTab: &podcastTab{},
-		searches:   map[route]*searchData{},
-		lyricAt:    -1,
-		queueAt:    -1,
-		cacheUsed:  -1,
-	}
+	a := &app{cacheUsed: -1, appPlatformState: appPlatformState{platformRegistrations: registrations}}
+	var startupErr error
 	moveOldData()
 	a.useUpdater()
 	mygo.App.WhenReady(func() {
-		a.settings = loadSettings()
+		a.settings = loadSettings(a.platformRegistrations...)
+		if os.Getenv("NM_SHOTS") != "" {
+			a.settings.path = ""
+		}
 		a.settings.applyAppearance()
-		a.npPane = a.lyricsPaneChosen()
 		// Before the window: on Windows it lays out its content as it is
 		// made, and the view asks the player what plays.
 		a.art = newArtCache(a.post)
 		a.pl = player.New(a.post)
-		a.pl.Quality = func() string { return a.settings.Quality }
-		a.pl.Normalize = func() bool { return a.settings.Normalize }
 		a.pl.Cache = newSongCache(a.settings.CacheMB)
 		a.syncMPVSettings()
 		a.pl.Changed = func() {
 			a.keepSession()
-			a.syncCaptions()
+			if changed := a.platformLifecycles[a.platformID].PlaybackChanged; changed != nil {
+				changed()
+			}
 			a.redraw()
 		}
 		a.volume = a.settings.Volume
 		a.pl.SetVolume(a.volume)
-		// Resolve the selected platform before the first window frame. Otherwise
-		// a configured platform briefly renders the upstream home and then
-		// switches during startup.
-		a.initPlatformState()
-		a.configurePlatformPlayer()
-		a.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:         appName,
-			Width:         1180,
-			Height:        780,
-			MinWidth:      880,
-			MinHeight:     580,
-			StateKey:      "main",
-			TitleBarStyle: mygo.TitleBarHidden,
-			// As tall as the edge over a page (Linux, Windows).
-			TitleBarHeight: buttonsHeight,
-			// Inset from the corner, within the sidebar, as macOS 26's
-			// apps with a sidebar place them.
-			TrafficLightPosition: &mygo.Point{X: 20, Y: 20},
-			Vibrancy:             mygo.VibrancySidebar,
-			BackgroundColor:      "light-dark(#ffffff, #141416)",
-			Content:              ui.View(a.view),
-		})
-		a.newDesktopLyrics()
-		a.setMenu()
-		a.startPlatform()
-		// The notch player is macOS's, over its menu bar: elsewhere it would
-		// hang at the top of the screen as a black box.
-		if runtime.GOOS == "darwin" {
-			a.notch = newNotch(a)
+		// Load the selected platform before the first window frame.
+		if !a.initPlatformState() {
+			startupErr = errors.New("no platform plugin registered a main window")
+			mygo.App.Quit()
+			return
 		}
+		a.configurePlatformPlayer()
+		a.activatePlatformView()
+		options := a.windowOptions(appplatform.MainWindow)
+		a.win = mygo.NewWindow(options)
+		a.syncPlatformWindows()
+		a.setMenu()
+		a.mountPlatformWindows()
+		a.platformReady(true)
 		// From the menu bar alone, the Dock icon shows while the window
 		// does.
 		a.syncDock()
 		a.win.OnShow(a.syncDock)
 		a.win.OnHide(a.syncDock)
-		// Shown or switched to the morning after, it shows the new day's.
-		a.win.OnFocus(a.freshenHome)
+		a.win.OnFocus(func() {
+			if focused := a.platformLifecycles[a.platformID].MainFocused; focused != nil {
+				focused()
+			}
+		})
 		a.applyTray()
-		if shotHook != nil {
-			shotHook(a)
-		}
 		// Closing the window hides it: music plays on, and the Dock icon
 		// or the tray's brings it back. A Linux desktop without a tray
 		// has neither, so there closing it quits.
@@ -317,16 +164,15 @@ func Run() error {
 	})
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
 		a.quitting = true
-		a.saveDesktopLyricsState()
-		if a.desktopLyricsWin != nil {
-			a.desktopLyricsWin.Close()
+		if startupErr != nil {
+			return
 		}
+		a.deactivatePlatformView(false)
+		a.unmountPlatformWindows()
+		a.destroyDesktopLyrics()
 		a.settings.Volume = a.volume
 		a.settings.save()
 		a.saveSession()
-		if write := a.transcriptWrite(); write != nil {
-			write()
-		}
 	})
 	// Windows leaves an icon in the notification area after its app until
 	// the pointer passes over it.
@@ -340,7 +186,10 @@ func Run() error {
 	// above, as the shortcut's while the window hides in the tray.
 	mygo.App.OnActivate(func(bool) { a.showMain() })
 	mygo.App.OnSecondInstance(func([]string, string) { a.showMain() })
-	return mygo.App.Run()
+	if err := mygo.App.Run(); err != nil {
+		return err
+	}
+	return startupErr
 }
 
 func (a *app) onVersionClicked() {
@@ -369,21 +218,4 @@ func (a *app) onVersionClicked() {
 			a.settingsWin.Invalidate()
 		}
 	}
-}
-
-func (a *app) versionDesc() string {
-	if a.devClicks >= 3 && a.devClicks < 5 {
-		if time.Since(a.devClickTime) <= 3*time.Second {
-			remaining := 5 - a.devClicks
-			if a.settings.DeveloperMode {
-				return fmt.Sprintf("再点击 %d 次关闭开发者模式", remaining)
-			}
-			return fmt.Sprintf("再点击 %d 次开启开发者模式", remaining)
-		}
-		a.devClicks = 0
-	}
-	if a.settings.DeveloperMode {
-		return "开发者模式已开启"
-	}
-	return ""
 }

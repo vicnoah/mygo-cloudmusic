@@ -1,30 +1,10 @@
 package app
 
 import (
-	"os"
 	"runtime"
 	"testing"
 	"time"
 )
-
-// An animated WebP cover, as some playlists have, shows its first frame,
-// in the bitmap too, which decodes its data again once it drops its pixels.
-func TestAnimatedWebPCover(t *testing.T) {
-	b, err := os.ReadFile("testdata/animated.webp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	bmp, img, err := decodeArt(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r := img.Bounds(); r.Dx() != 24 || r.Dy() != 24 {
-		t.Errorf("first frame is %v, want 24×24", r)
-	}
-	if w, h := bmp.Size(); w != 24 || h != 24 {
-		t.Errorf("bitmap is %d×%d, want 24×24", w, h)
-	}
-}
 
 // Once the covers take more than the limit, those asked for least
 // recently go, so that a long session does not keep every cover it
@@ -37,7 +17,7 @@ func TestArtCacheDropsLeastRecentCovers(t *testing.T) {
 		c.add(key, &artwork{used: now, size: 30})
 		now = now.Add(time.Minute)
 	}
-	c.get("first", false)
+	c.get("first", "first", false)
 	c.add("fourth", &artwork{used: now, size: 30})
 	if _, ok := c.art["second"]; ok {
 		t.Error("kept the cover asked for least recently over the limit")
@@ -60,9 +40,9 @@ func TestArtCacheKeepsCoversUnderLimit(t *testing.T) {
 	c.add("page", page)
 	for range 60 {
 		now = now.Add(time.Minute)
-		c.get("other", false)
+		c.get("other", "other", false)
 	}
-	if c.get("page", false) != page {
+	if c.get("page", "page", false) != page {
 		t.Error("dropped a cover not asked for in an hour, under the limit")
 	}
 }
@@ -83,7 +63,7 @@ func TestArtCacheKeepsHeldCovers(t *testing.T) {
 	if _, ok := c.art["now playing"]; ok {
 		t.Fatal("kept a cover over the limit")
 	}
-	if got := c.get("now playing", false); got != held {
+	if got := c.get("now playing", "now playing", false); got != held {
 		t.Error("loaded again a cover something still held")
 	}
 	runtime.KeepAlive(held)

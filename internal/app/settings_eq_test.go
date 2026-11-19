@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo"
-	"netease-music-mygo/internal/eq"
+	"waygu-music/internal/pluginapi/eq"
 )
 
 // Settings from before the 15-band equalizer reset the equalizer, but

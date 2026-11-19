@@ -13,10 +13,10 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/audio"
 
-	"netease-music-mygo/internal/lyrics"
-	"netease-music-mygo/internal/netease"
-	"netease-music-mygo/internal/player/dlna"
-	"netease-music-mygo/internal/player/mpv"
+	"waygu-music/internal/player/dlna"
+	"waygu-music/internal/player/mpv"
+	"waygu-music/internal/pluginapi"
+	"waygu-music/internal/pluginapi/lyrics"
 )
 
 type mpvVolumeOutput struct {
@@ -36,12 +36,12 @@ func (m mpvVolumeOutput) setFadeLevel(level float64) {
 	}
 }
 
-type RepeatMode int
+type RepeatMode = pluginapi.RepeatMode
 
 const (
-	RepeatOff RepeatMode = iota
-	RepeatAll
-	RepeatOne
+	RepeatOff = pluginapi.RepeatOff
+	RepeatAll = pluginapi.RepeatAll
+	RepeatOne = pluginapi.RepeatOne
 )
 
 // Player plays a queue of tracks. Its methods run on the main thread;
@@ -56,11 +56,13 @@ type Player struct {
 	Normalize func() bool
 	// Cache keeps the songs played, if set.
 	Cache *Cache
+	// TrackPlatform resolves a track to its registered instance.
+	TrackPlatform func(*pluginapi.Track) pluginapi.ID
 	// Changed, if set, hears that what plays, where it is or whether it
 	// plays changed.
 	Changed func()
 
-	queue   []netease.Track
+	queue   []pluginapi.Track
 	order   []int // the queue's indices in play order: shuffled or not
 	at      int   // where in order the current track is, -1 for none
 	shuffle bool
@@ -70,15 +72,15 @@ type Player struct {
 	// A radio goes on with the tracks its feed gives, as the queue nears
 	// its end, for as long as nothing else is played.
 	radio    string
-	feed     func(got func([]netease.Track))
+	feed     func(got func([]pluginapi.Track))
 	radioGen int  // counts radios, to drop what an old one gives
 	feeding  bool // the feed is asked
 	awaiting bool // at the queue's end, for what the feed gives
 
-	track   *netease.Track
+	track   *pluginapi.Track
 	out     *audio.Player
 	stream  stream
-	info    *netease.Stream // what the current track streams
+	info    *pluginapi.Stream // what the current track streams
 	fade    fader
 	gain    float64 // the current track's normalizing gain
 	loading bool
@@ -112,13 +114,6 @@ func New(post func(func())) *Player {
 	p := &Player{post: post, at: -1, volume: 0.8, gain: 1}
 	if ctrl, err := dlna.NewController(func() { p.post(p.sync) }); err == nil {
 		p.dlnaCtrl = ctrl
-		p.dlnaCtrl.OnEnd(func() {
-			p.post(func() {
-				if p.IsCasting() {
-					p.ended()
-				}
-			})
-		})
 	}
 	// Music, mixed far enough ahead to play on while macOS keeps the app
 	// waiting, as it does while its appearance changes.
@@ -159,7 +154,7 @@ func (p *Player) sync() {
 }
 
 // announce shows the system the track, and its cover once loaded.
-func (p *Player) announce(t *netease.Track, artwork []byte) {
+func (p *Player) announce(t *pluginapi.Track, artwork []byte) {
 	state := mygo.PlaybackPaused
 	if p.playing {
 		state = mygo.PlaybackPlaying
@@ -195,13 +190,13 @@ func (p *Player) ended() {
 }
 
 // PlayQueue replaces the queue with tracks and plays the one at start.
-func (p *Player) PlayQueue(tracks []netease.Track, start int) {
+func (p *Player) PlayQueue(tracks []pluginapi.Track, start int) {
 	if len(tracks) == 0 {
 		return
 	}
 	p.endRadio()
 	start = min(max(start, 0), len(tracks)-1)
-	p.queue = append([]netease.Track(nil), tracks...)
+	p.queue = append([]pluginapi.Track(nil), tracks...)
 	p.order = make([]int, len(p.queue))
 	for i := range p.order {
 		p.order[i] = i
@@ -217,7 +212,7 @@ func (p *Player) PlayQueue(tracks []netease.Track, start int) {
 // PlayRadio plays tracks in their order, then goes on with those feed
 // gives as the queue nears its end, until something else is played. The
 // radio's name says which it is. feed calls got on the main thread.
-func (p *Player) PlayRadio(name string, tracks []netease.Track, feed func(got func([]netease.Track))) {
+func (p *Player) PlayRadio(name string, tracks []pluginapi.Track, feed func(got func([]pluginapi.Track))) {
 	if len(tracks) == 0 {
 		return
 	}
@@ -231,18 +226,18 @@ func (p *Player) PlayRadio(name string, tracks []netease.Track, feed func(got fu
 // RadioFrom makes the track playing the first of a radio's queue, which
 // goes on with tracks, then with those feed gives: without starting it
 // over.
-func (p *Player) RadioFrom(name string, tracks []netease.Track, feed func(got func([]netease.Track))) {
+func (p *Player) RadioFrom(name string, tracks []pluginapi.Track, feed func(got func([]pluginapi.Track))) {
 	if p.track == nil {
 		return
 	}
-	p.queue, p.order, p.at = []netease.Track{*p.track}, []int{0}, 0
+	p.queue, p.order, p.at = []pluginapi.Track{*p.track}, []int{0}, 0
 	p.appendTracks(tracks)
 	p.AttachRadio(name, feed)
 }
 
 // AttachRadio makes the queue the radio name's, which feed goes on with,
 // as after restoring a session that played it.
-func (p *Player) AttachRadio(name string, feed func(got func([]netease.Track))) {
+func (p *Player) AttachRadio(name string, feed func(got func([]pluginapi.Track))) {
 	p.endRadio()
 	p.radio, p.feed = name, feed
 	p.refill()
@@ -257,7 +252,7 @@ func (p *Player) EndRadio() {
 	awaiting := p.awaiting
 	p.endRadio()
 	if p.at >= 0 && p.at+1 < len(p.order) {
-		kept := make([]netease.Track, p.at+1)
+		kept := make([]pluginapi.Track, p.at+1)
 		for i, k := range p.order[:p.at+1] {
 			kept[i] = p.queue[k]
 		}
@@ -288,7 +283,7 @@ func (p *Player) refill() {
 	}
 	p.feeding = true
 	gen := p.radioGen
-	p.feed(func(more []netease.Track) {
+	p.feed(func(more []pluginapi.Track) {
 		if gen != p.radioGen {
 			return
 		}
@@ -317,14 +312,15 @@ func (p *Player) awaitFeed() {
 }
 
 // appendTracks adds tracks to the end of the queue, but those in it.
-func (p *Player) appendTracks(tracks []netease.Track) {
-	in := make(map[int64]bool, len(p.queue))
+func (p *Player) appendTracks(tracks []pluginapi.Track) {
+	in := make(map[trackIdentity]bool, len(p.queue))
 	for _, t := range p.queue {
-		in[t.ID] = true
+		in[identifyTrack(p.trackOwner(&t), &t)] = true
 	}
 	for _, t := range tracks {
-		if !in[t.ID] {
-			in[t.ID] = true
+		ref := identifyTrack(p.trackOwner(&t), &t)
+		if !in[ref] {
+			in[ref] = true
 			p.order = append(p.order, len(p.queue))
 			p.queue = append(p.queue, t)
 		}
@@ -361,10 +357,10 @@ func (p *Player) ToggleShuffle() {
 func (p *Player) CycleRepeat() { p.repeat = (p.repeat + 1) % 3 }
 
 // Current returns the track playing or loading, or nil.
-func (p *Player) Current() *netease.Track { return p.track }
+func (p *Player) Current() *pluginapi.Track { return p.track }
 
 // Queue returns the tracks queued, in the order they were given.
-func (p *Player) Queue() []netease.Track { return p.queue }
+func (p *Player) Queue() []pluginapi.Track { return p.queue }
 
 // Playing reports what the listener wants: false while paused.
 func (p *Player) Playing() bool { return p.playing }
@@ -381,7 +377,7 @@ func (p *Player) Ready() bool {
 func (p *Player) Err() string { return p.err }
 
 // Stream returns what the current track streams, once loaded, or nil.
-func (p *Player) Stream() *netease.Stream { return p.info }
+func (p *Player) Stream() *pluginapi.Stream { return p.info }
 
 func (p *Player) Shuffle() bool      { return p.shuffle }
 func (p *Player) Repeat() RepeatMode { return p.repeat }
@@ -402,14 +398,7 @@ func (p *Player) Downloaded() (float64, bool) {
 // Audio is the current track's sound decoded apart from what plays, as
 // OpenAudio opens it: interleaved stereo at its rate, read as it
 // downloads.
-type Audio interface {
-	SampleRate() int
-	Channels() int
-	Read(dst []float32) (int, error)
-	// SetPosition goes to a frame, of SampleRate a second.
-	SetPosition(frame int64) error
-	Close() error
-}
+type Audio = pluginapi.Audio
 
 // OpenAudio opens the current track's sound again, for decoding apart
 // from what plays, as for transcribing an episode. It reads the same
@@ -489,11 +478,7 @@ func (p *Player) SwitchOutput(devID string) {
 	at := p.at
 
 	// Stop previous output before selecting the new device target
-	if wasCasting {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = p.dlnaCtrl.Stop(ctx)
-		cancel()
-	} else {
+	if !wasCasting {
 		p.stop()
 	}
 
@@ -563,8 +548,10 @@ func (p *Player) MPVReady() bool {
 // TogglePlay pauses, fading out, or plays, fading in.
 func (p *Player) TogglePlay() {
 	if p.IsCasting() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
+		if p.track == nil {
+			return
+		}
+		ctx := p.trackContext()
 		if p.playing {
 			p.playing = false
 			_ = p.dlnaCtrl.Pause(ctx)
@@ -643,9 +630,10 @@ const seekGap = 30 * time.Millisecond
 // cutting from one sound to the other with a click.
 func (p *Player) Seek(t time.Duration) {
 	if p.IsCasting() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = p.dlnaCtrl.Seek(ctx, t)
+		if p.track == nil {
+			return
+		}
+		_ = p.dlnaCtrl.Seek(p.trackContext(), t)
 		p.sync()
 		return
 	}
@@ -700,13 +688,14 @@ func (p *Player) SetVolume(v float64) {
 // hears in powers, and the track's gain, if normalizing.
 func (p *Player) applyGain() {
 	g := p.volume * p.volume
-	if p.Normalize != nil && p.Normalize() {
+	normalize := p.playbackPreferences(p.track).Normalize
+	if normalize {
 		g *= p.gain
 	}
 	p.fade.setGain(g)
 	if p.mpvOut != nil {
 		db := 0.0
-		if p.Normalize != nil && p.Normalize() && p.info != nil && p.info.Gain != 0 {
+		if normalize && p.info != nil && p.info.Gain != 0 {
 			db = p.info.Gain + normPreamp
 		}
 		// Setting replaygain is not free, and a volume change keeps it:
@@ -725,7 +714,7 @@ const normPreamp = 0
 
 // normGain is the gain that brings a track as loud as others, as NetEase
 // measured it, but never so loud that its peaks would clip.
-func normGain(st *netease.Stream) float64 {
+func normGain(st *pluginapi.Stream) float64 {
 	if st == nil || st.Gain == 0 && st.Peak == 0 {
 		return 1
 	}
@@ -782,6 +771,11 @@ func (p *Player) Levels() ([Bands]float32, bool) {
 }
 
 func (p *Player) stop() {
+	if p.cancelLoad != nil {
+		p.cancelLoad()
+		p.cancelLoad = nil
+	}
+	p.loadContext = nil
 	if out := p.out; out != nil {
 		// Paused first, it fades out over a few milliseconds, rather than
 		// stopping with a click.
@@ -807,6 +801,8 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 	p.stop()
 	p.gen++
 	gen := p.gen
+	ctx, cancel := context.WithCancel(context.Background())
+	p.loadContext, p.cancelLoad = ctx, cancel
 	p.at = at
 	t := p.queue[p.order[at]]
 	p.track = &t
@@ -817,11 +813,21 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 	p.announce(&t, nil)
 	p.refill()
 
+	var castCover chan []byte
+	if p.IsCasting() && needsResolvedCover(&t) {
+		castCover = make(chan []byte, 1)
+	}
 	go func() {
-		cover, err := p.resolveArtwork(&t)
+		cover, err := p.resolveArtwork(ctx, &t)
+		if err != nil {
+			cover = nil
+		}
+		if castCover != nil {
+			castCover <- cover
+		}
 		if err == nil {
 			p.post(func() {
-				if gen == p.gen {
+				if gen == p.gen && ctx.Err() == nil {
 					p.announce(&t, cover)
 				}
 			})
@@ -829,26 +835,38 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 	}()
 
 	go func() {
-		lrc, trans, yrc, err := p.resolveLyrics(&t)
+		lrc, trans, yrc, err := p.resolveLyrics(ctx, &t)
 		var lines []lyrics.Line
 		if err == nil {
 			lines = lyrics.Build(lrc, trans, yrc)
 		}
 		p.post(func() {
-			if gen == p.gen {
+			if gen == p.gen && ctx.Err() == nil {
 				p.lyrics = lines
 				p.lyricsLoaded = true
 			}
 		})
 	}()
+	level := p.playbackPreferences(&t).Quality
+	direct := p.UsingMPV() || p.IsCasting()
 	go func() {
-		level := "exhigh"
-		if p.Quality != nil {
-			level = p.Quality()
+		media, err := p.open(ctx, t, level, direct)
+		info, s := media.info, media.decoded
+		var coverData []byte
+		if err == nil && castCover != nil {
+			select {
+			case coverData = <-castCover:
+			case <-ctx.Done():
+			}
 		}
-		info, s, err := p.open(t, level)
+		if ctx.Err() != nil {
+			if s != nil {
+				s.Close()
+			}
+			return
+		}
 		p.post(func() {
-			if gen != p.gen {
+			if gen != p.gen || ctx.Err() != nil {
 				if s != nil {
 					s.Close()
 				}
@@ -857,12 +875,10 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 			p.loading = false
 			if err != nil {
 				p.err = err.Error()
-				switch {
-				case err != netease.ErrUnavailable:
-				case t.ProgramID != 0:
-					p.err = "这期节目需要购买才能收听"
-				default:
-					p.err = "这首歌需要 VIP 才能播放"
+				if p.StreamError != nil {
+					if message := p.StreamError(&t, err); message != "" {
+						p.err = message
+					}
 				}
 				// Skip what cannot play, unless nothing in the queue can, or
 				// a few in a row could not: a NAS gone away fails every
@@ -896,10 +912,6 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 				if info.Header != nil {
 					headers = info.Header()
 				}
-				localFile := ""
-				if p.Cache != nil {
-					localFile = p.Cache.FilePath(t.ID, level)
-				}
 				sampleRate := 44100
 				bitsPerSample := 16
 				if info.Level == "hires" {
@@ -911,22 +923,16 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 				if durSec > 0 && info.Size > 0 {
 					bitrate = int(info.Size / durSec)
 				}
-				trackID := fmt.Sprintf("%d", t.ID)
-				var coverData []byte
-				if t.Source != "" || strings.HasPrefix(t.Album.PicURL, "fnmusic://") || strings.HasPrefix(t.Album.PicURL, "subsonic://") || strings.HasPrefix(t.Album.PicURL, "songloft://") {
-					if b, err := p.resolveArtwork(&t); err == nil && len(b) > 0 {
-						coverData = b
-					}
-				}
+				trackID := p.castTrackID(&t, gen, at)
 				meta := dlna.TrackMeta{
 					ID:              trackID,
 					Title:           t.Name,
 					Artist:          t.ArtistNames(),
 					Album:           t.Album.Name,
-					CoverURL:        netease.Sized(t.Album.PicURL, 600),
+					CoverURL:        p.coverURL(&t),
 					CoverData:       coverData,
 					StreamURL:       info.URL,
-					LocalFile:       localFile,
+					LocalFile:       media.localFile,
 					Format:          info.Type,
 					Duration:        t.Length(),
 					Size:            info.Size,
@@ -936,7 +942,14 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 					Channels:        2,
 					Headers:         headers,
 				}
-				if err := p.dlnaCtrl.PlayTrack(context.Background(), meta, p.pending); err != nil {
+				p.dlnaCtrl.OnEnd(func() {
+					p.post(func() {
+						if gen == p.gen && ctx.Err() == nil && p.IsCasting() {
+							p.ended()
+						}
+					})
+				})
+				if err := p.dlnaCtrl.PlayTrack(ctx, meta, p.pending); err != nil {
 					p.err = fmt.Sprintf("无线投送失败: %v", err)
 					p.playing = false
 					p.sync()
@@ -945,7 +958,7 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 				p.pending = 0
 				p.markStarted()
 				p.sync()
-				p.prefetchNextDLNA(at, gen)
+				p.prefetchNextDLNA(at)
 				return
 			}
 
@@ -965,37 +978,7 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 					p.mpvOut = engine
 					p.rgSet = false
 				}
-				playURL := info.URL
-				if p.Cache != nil {
-					if f := p.Cache.FilePath(t.ID, level); f != "" {
-						playURL = f
-					}
-				}
-				// If streaming over network and we have a proxy, route via local proxy
-				// to solve auth headers, cookies, range requests and MIME types cleanly.
-				if (strings.HasPrefix(playURL, "http://") || strings.HasPrefix(playURL, "https://")) && p.dlnaCtrl != nil && p.dlnaCtrl.Proxy() != nil {
-					headers := http.Header{}
-					if info.Header != nil {
-						headers = info.Header()
-					}
-					ext := info.Type
-					if ext == "" {
-						ext = t.Format
-					}
-					ext = strings.TrimPrefix(ext, ".")
-					var trackID string
-					if ext != "" {
-						trackID = fmt.Sprintf("mpv-%d-%d.%s", t.ID, time.Now().UnixNano(), ext)
-					} else {
-						trackID = fmt.Sprintf("mpv-%d-%d", t.ID, time.Now().UnixNano())
-					}
-					p.dlnaCtrl.Proxy().Register(trackID, dlna.StreamSource{
-						RemoteURL:   playURL,
-						Headers:     headers,
-						ContentType: dlna.FormatToMIME(info.Type),
-					})
-					playURL = p.dlnaCtrl.Proxy().LocalURL(trackID)
-				}
+				playURL := p.mpvURL(ctx, &t, media)
 
 				if playURL != "" {
 					if err := engine.Play(playURL, nil, p.pending); err == nil {
@@ -1067,6 +1050,35 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 	}()
 }
 
+// mpvURL keeps authenticated streams available for this load and its prefetch.
+func (p *Player) mpvURL(ctx context.Context, t *pluginapi.Track, media playbackSource) string {
+	playURL := media.location()
+	if p.dlnaCtrl == nil || p.dlnaCtrl.Proxy() == nil ||
+		(!strings.HasPrefix(playURL, "http://") && !strings.HasPrefix(playURL, "https://")) {
+		return playURL
+	}
+	proxy := p.dlnaCtrl.Proxy()
+	var headers http.Header
+	if media.info.Header != nil {
+		headers = media.info.Header()
+	}
+	ext := media.info.Type
+	if ext == "" {
+		ext = t.Format
+	}
+	trackID := fmt.Sprintf("mpv-%d-%d", t.ID, time.Now().UnixNano())
+	if ext = strings.TrimPrefix(ext, "."); ext != "" {
+		trackID += "." + ext
+	}
+	proxy.Register(trackID, dlna.StreamSource{
+		RemoteURL:   playURL,
+		Headers:     headers,
+		ContentType: dlna.FormatToMIME(media.info.Type),
+	})
+	context.AfterFunc(ctx, func() { proxy.Unregister(trackID) })
+	return proxy.LocalURL(trackID)
+}
+
 // prefetchNextMPV resolves and preloads the next song into MPV's gapless playlist.
 func (p *Player) prefetchNextMPV(at, gen int) {
 	if !p.UsingMPV() || p.repeat == RepeatOne || p.mpvOut == nil {
@@ -1084,44 +1096,15 @@ func (p *Player) prefetchNextMPV(at, gen int) {
 		return
 	}
 	nextTrack := p.queue[p.order[nextAt]]
+	ctx, level := p.loadContext, p.playbackPreferences(&nextTrack).Quality
 	go func() {
-		level := "exhigh"
-		if p.Quality != nil {
-			level = p.Quality()
-		}
-		info, _, err := p.open(nextTrack, level)
-		if err != nil || info == nil || info.URL == "" {
+		media, ok := p.openNextOutput(ctx, nextTrack, level)
+		if !ok {
 			return
 		}
-		playURL := info.URL
-		if p.Cache != nil {
-			if f := p.Cache.FilePath(nextTrack.ID, level); f != "" {
-				playURL = f
-			}
-		}
-		if (strings.HasPrefix(playURL, "http://") || strings.HasPrefix(playURL, "https://")) && p.dlnaCtrl != nil && p.dlnaCtrl.Proxy() != nil {
-			headers := http.Header{}
-			if info.Header != nil {
-				headers = info.Header()
-			}
-			ext := info.Type
-			if ext == "" {
-				ext = nextTrack.Format
-			}
-			ext = strings.TrimPrefix(ext, ".")
-			trackID := fmt.Sprintf("mpv-%d-%d", nextTrack.ID, time.Now().UnixNano())
-			if ext != "" {
-				trackID += "." + ext
-			}
-			p.dlnaCtrl.Proxy().Register(trackID, dlna.StreamSource{
-				RemoteURL:   playURL,
-				Headers:     headers,
-				ContentType: dlna.FormatToMIME(info.Type),
-			})
-			playURL = p.dlnaCtrl.Proxy().LocalURL(trackID)
-		}
+		playURL := p.mpvURL(ctx, &nextTrack, media)
 		p.post(func() {
-			if gen == p.gen && p.mpvOut != nil && !p.mpvOut.Closed() {
+			if gen == p.gen && ctx.Err() == nil && p.mpvOut != nil && !p.mpvOut.Closed() {
 				_ = p.mpvOut.Append(playURL)
 			}
 		})
@@ -1129,7 +1112,7 @@ func (p *Player) prefetchNextMPV(at, gen int) {
 }
 
 // prefetchNextDLNA resolves and stages the next track to the DLNA renderer for gapless playback.
-func (p *Player) prefetchNextDLNA(at, gen int) {
+func (p *Player) prefetchNextDLNA(at int) {
 	if !p.IsCasting() || p.repeat == RepeatOne || p.dlnaCtrl == nil {
 		return
 	}
@@ -1145,26 +1128,27 @@ func (p *Player) prefetchNextDLNA(at, gen int) {
 		return
 	}
 	nextTrack := p.queue[p.order[nextAt]]
+	ctx, level := p.loadContext, p.playbackPreferences(&nextTrack).Quality
+	trackID := p.castTrackID(&nextTrack, p.gen, nextAt) + "-next"
 	go func() {
 		// Delay staging the next track by 6 seconds so the DMR establishes its primary playback stream
 		// without receiving conflicting UPnP pipeline commands during startup (fixing XiaoAi / XiaoMing DMR startup stall).
-		time.Sleep(6 * time.Second)
-		if gen != p.gen || !p.IsCasting() {
+		timer := time.NewTimer(6 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		if !p.IsCasting() {
 			return
 		}
 
-		level := "exhigh"
-		if p.Quality != nil {
-			level = p.Quality()
-		}
-		info, _, err := p.open(nextTrack, level)
-		if err != nil || info == nil || info.URL == "" {
+		media, ok := p.openNextOutput(ctx, nextTrack, level)
+		if !ok {
 			return
 		}
-		localFile := ""
-		if p.Cache != nil {
-			localFile = p.Cache.FilePath(nextTrack.ID, level)
-		}
+		info := media.info
 		headers := http.Header{}
 		if info.Header != nil {
 			headers = info.Header()
@@ -1181,20 +1165,20 @@ func (p *Player) prefetchNextDLNA(at, gen int) {
 			bitrate = int(info.Size / durSec)
 		}
 		var coverData []byte
-		if nextTrack.Source != "" || strings.HasPrefix(nextTrack.Album.PicURL, "fnmusic://") || strings.HasPrefix(nextTrack.Album.PicURL, "subsonic://") || strings.HasPrefix(nextTrack.Album.PicURL, "songloft://") {
-			if b, err := p.resolveArtwork(&nextTrack); err == nil && len(b) > 0 {
+		if needsResolvedCover(&nextTrack) {
+			if b, err := p.resolveArtwork(ctx, &nextTrack); err == nil && len(b) > 0 {
 				coverData = b
 			}
 		}
 		meta := dlna.TrackMeta{
-			ID:              fmt.Sprintf("%d", nextTrack.ID),
+			ID:              trackID,
 			Title:           nextTrack.Name,
 			Artist:          nextTrack.ArtistNames(),
 			Album:           nextTrack.Album.Name,
-			CoverURL:        netease.Sized(nextTrack.Album.PicURL, 600),
+			CoverURL:        p.coverURL(&nextTrack),
 			CoverData:       coverData,
 			StreamURL:       info.URL,
-			LocalFile:       localFile,
+			LocalFile:       media.localFile,
 			Format:          info.Type,
 			Duration:        nextTrack.Length(),
 			Size:            info.Size,
@@ -1204,51 +1188,120 @@ func (p *Player) prefetchNextDLNA(at, gen int) {
 			Channels:        2,
 			Headers:         headers,
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		_ = p.dlnaCtrl.SetNextTrack(ctx, meta)
 	}()
 }
 
+func needsResolvedCover(t *pluginapi.Track) bool {
+	return t.Source != "" || (t.Album.PicURL != "" && !strings.HasPrefix(t.Album.PicURL, "http"))
+}
+
+func (p *Player) playbackPreferences(track *pluginapi.Track) pluginapi.AudioPreferences {
+	if p.TrackPreferences != nil && track != nil {
+		return p.TrackPreferences(track)
+	}
+	prefs := pluginapi.AudioPreferences{Quality: "exhigh"}
+	if p.Quality != nil {
+		prefs.Quality = p.Quality()
+	}
+	if p.Normalize != nil {
+		prefs.Normalize = p.Normalize()
+	}
+	return prefs
+}
+
+func (p *Player) trackOwner(t *pluginapi.Track) pluginapi.ID {
+	owner := pluginapi.ID(t.Source)
+	if p.TrackPlatform != nil {
+		if registered := p.TrackPlatform(t); registered != "" {
+			return registered
+		}
+	}
+	return owner
+}
+
+func (p *Player) castTrackID(t *pluginapi.Track, generation, at int) string {
+	return fmt.Sprintf("%x-%d-%d", trackFingerprint(trackCacheRef(p.trackOwner(t), t)), generation, at)
+}
+
+type playbackSource struct {
+	info      *pluginapi.Stream
+	decoded   stream
+	localFile string
+}
+
+func (s playbackSource) location() string {
+	if s.localFile != "" {
+		return s.localFile
+	}
+	if s.info == nil {
+		return ""
+	}
+	return s.info.URL
+}
+
+// External outputs can stage a complete cached file or a network stream.
+func (p *Player) openNextOutput(ctx context.Context, t pluginapi.Track, level string) (playbackSource, bool) {
+	media, err := p.open(ctx, t, level, true)
+	if media.decoded != nil {
+		media.decoded.Close()
+	}
+	return media, err == nil && ctx.Err() == nil && media.location() != ""
+}
+
 // open opens track t's audio at level: kept in the cache, or else
 // streamed into it, and kept once it has all come in.
-func (p *Player) open(t netease.Track, level string) (*netease.Stream, stream, error) {
-	if info, decoded, err, handled := p.resolveAudio(&t, level); handled {
-		return info, decoded, err
+func (p *Player) open(ctx context.Context, t pluginapi.Track, level string, direct bool) (playbackSource, error) {
+	if err := ctx.Err(); err != nil {
+		return playbackSource{}, err
 	}
-	dl, info, ok := p.Cache.lookup(t.ID, level)
+	if info, decoded, err, handled := p.resolveAudio(ctx, &t, direct); handled {
+		return playbackSource{info: info, decoded: decoded}, err
+	}
+	ref := trackCacheRef(p.trackOwner(&t), &t)
+	dl, info, ok := p.Cache.lookup(ref, level)
 	if !ok {
 		var err error
-		info, err = p.resolveStream(&t, level)
+		info, err = p.resolveStream(ctx, &t, level)
 		if err != nil {
-			return nil, nil, err
+			return playbackSource{}, err
 		}
-		if p.UsingMPV() || p.IsCasting() {
-			return info, nil, nil
+		if p.Cache.promoteLegacy(ctx, ref, t.ID, info) {
+			var cached *pluginapi.Stream
+			if dl, cached, ok = p.Cache.lookup(ref, info.Level); ok {
+				info = cached
+			}
 		}
-		dl = p.Cache.download(t.ID, info)
 	}
-	if p.UsingMPV() || p.IsCasting() {
-		return info, nil, nil
+	if err := ctx.Err(); err != nil {
+		if dl != nil {
+			dl.Close()
+		}
+		return playbackSource{}, err
+	}
+	if direct {
+		if !ok {
+			return playbackSource{info: info}, nil
+		}
+		path := dl.file.Name()
+		dl.Close()
+		return playbackSource{info: info, localFile: path}, nil
+	}
+	if !ok {
+		dl = p.Cache.download(ref, info)
 	}
 	s, err := openStream(dl, t.Duration)
 	if err != nil {
 		dl.Close()
-		return nil, nil, err
+		return playbackSource{}, err
 	}
-	return info, s, nil
+	return playbackSource{info: info, decoded: s}, nil
 }
 
 // Session is where playback was left, to pick up again.
-type Session struct {
-	Queue    []netease.Track `json:"queue"`
-	Order    []int           `json:"order"`
-	At       int             `json:"at"`
-	Shuffle  bool            `json:"shuffle"`
-	Repeat   RepeatMode      `json:"repeat"`
-	Position int64           `json:"position"` // milliseconds
-	Radio    string          `json:"radio,omitempty"`
-}
+type Session = pluginapi.PlaybackSession
 
 // Session returns where playback is, or false with nothing queued.
 func (p *Player) Session() (Session, bool) {

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	gomp3 "github.com/hajimehoshi/go-mp3"
+
+	"waygu-music/internal/pluginapi"
 )
 
 // hlsStream decodes an MP3 source that arrives in ordered pieces. A
@@ -17,7 +19,7 @@ import (
 // An MP3 frame borrows bits from the frames before it, so the decoder starts
 // a piece early on a seek, and drops what that decodes (the preroll).
 type hlsStream struct {
-	h      SegmentedSource
+	h      pluginapi.SegmentedSource
 	starts []int64 // the frame each piece starts at, by the lengths given
 	rate   int
 	frames int64
@@ -39,7 +41,7 @@ type hlsStream struct {
 // jitter while keeping memory usage modest.
 const hlsAhead = 32
 
-func openSegmentedStream(h SegmentedSource) (*hlsStream, error) {
+func openSegmentedStream(h pluginapi.SegmentedSource) (*hlsStream, error) {
 	if h == nil || h.SegmentCount() == 0 {
 		return nil, io.ErrUnexpectedEOF
 	}
@@ -157,7 +159,7 @@ type pieceResult struct {
 	err error
 }
 
-func newPieceReader(h SegmentedSource, from int, prog *download, seen map[int]bool) *pieceReader {
+func newPieceReader(h pluginapi.SegmentedSource, from int, prog *download, seen map[int]bool) *pieceReader {
 	ctx, cancel := context.WithCancel(context.Background())
 	capacity := max(h.SegmentCount()-from, hlsAhead)
 	r := &pieceReader{cancel: cancel, pieces: make(chan pieceResult, capacity)}

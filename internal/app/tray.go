@@ -6,6 +6,8 @@ import (
 	"runtime"
 
 	"github.com/egoist/mygo"
+
+	"waygu-music/internal/pluginapi"
 )
 
 // The app's icon in the menu bar on macOS, as the settings choose
@@ -25,16 +27,6 @@ var trayTemplate []byte
 //go:embed tray/tray.png
 var trayColor []byte
 
-// appIcons are where the app's icon shows on macOS, with their names: the
-// Dock and the menu bar, the Dock alone, or the menu bar alone.
-var appIcons = []struct{ id, label string }{
-	{"dock-and-menubar", "程序坞与菜单栏"},
-	{"dock", "仅程序坞"},
-	{"menubar", "仅菜单栏"},
-}
-
-// showsTray tells whether the app's icon shows in the menu bar or the
-// notification area.
 func showsTray(s settings) bool {
 	return runtime.GOOS != "darwin" || s.AppIcon != "dock"
 }
@@ -99,39 +91,5 @@ func (a *app) applyTray() {
 // trayMenu is the icon's menu: the window, the player's controls,
 // settings, updates, and quitting.
 func (a *app) trayMenu() *mygo.Menu {
-	run := func(fn func()) func(*mygo.MenuItem, *mygo.Window) {
-		return func(*mygo.MenuItem, *mygo.Window) {
-			fn()
-			a.redraw()
-		}
-	}
-	// In front, as from the menu bar alone, where the app may not be.
-	front := func(fn func()) func() {
-		return func() {
-			mygo.App.Focus()
-			fn()
-		}
-	}
-	name := appName
-	lockLabel := "锁定桌面歌词"
-	if a.desktopLyricsLocked {
-		lockLabel = "解锁桌面歌词"
-	}
-	lockItem := &mygo.MenuItem{Label: lockLabel, Click: run(a.toggleDesktopLyricsLock)}
-	a.desktopLyricsLockItem = lockItem
-	return mygo.NewMenu([]*mygo.MenuItem{
-		{Label: "打开" + name, Click: run(a.showMain)},
-		{Label: "桌面歌词", Click: run(a.toggleDesktopLyrics)},
-		lockItem,
-		mygo.Separator(),
-		{Label: "播放/暂停", Click: run(func() { a.pl.TogglePlay() })},
-		{Label: "下一首", Click: run(func() { a.pl.Next() })},
-		{Label: "上一首", Click: run(func() { a.pl.Prev() })},
-		{Label: "喜欢/取消喜欢", Click: run(a.likeCurrent)},
-		mygo.Separator(),
-		{Label: "设置…", Click: run(front(a.openSettings))},
-		{Label: "检查更新…", Click: run(front(checkForUpdates))},
-		mygo.Separator(),
-		{Label: "退出" + name, Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
-	})
+	return a.platformMenu(pluginapi.TrayMenu)
 }

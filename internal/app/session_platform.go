@@ -3,7 +3,7 @@ package app
 import (
 	"os"
 
-	"netease-music-mygo/internal/player"
+	"waygu-music/internal/player"
 )
 
 // Platform session extension seam.

@@ -256,6 +256,8 @@ func (p *Proxy) detectLANIPFor(targetURL string) string {
 func (p *Proxy) Unregister(trackID string) {
 	p.mu.Lock()
 	delete(p.sources, trackID)
+	delete(p.covers, trackID)
+	delete(p.coverBytes, trackID)
 	if m, ok := p.activeCancels[trackID]; ok {
 		for _, cancel := range m {
 			if cancel != nil {
@@ -283,7 +285,7 @@ const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 	rawID := r.URL.Path[len("/stream/"):]
-	p.mu.RLock()
+	p.mu.Lock()
 	src, ok := p.sources[rawID]
 	key := rawID
 	if !ok {
@@ -293,12 +295,31 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 			src, ok = p.sources[key]
 		}
 	}
-	p.mu.RUnlock()
-
 	if !ok {
+		p.mu.Unlock()
 		http.Error(w, "stream not found", http.StatusNotFound)
 		return
 	}
+	// Register the request before releasing the lookup lock so revoking a cast
+	// also catches requests arriving during a platform switch.
+	reqID := atomic.AddUint64(&p.nextReqID, 1)
+	ctx, cancel := context.WithCancel(r.Context())
+	if p.activeCancels[key] == nil {
+		p.activeCancels[key] = make(map[uint64]context.CancelFunc)
+	}
+	p.activeCancels[key][reqID] = cancel
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		if m, ok := p.activeCancels[key]; ok {
+			delete(m, reqID)
+			if len(m) == 0 {
+				delete(p.activeCancels, key)
+			}
+		}
+		p.mu.Unlock()
+		cancel()
+	}()
 
 	// Always emit DLNA compliance headers on all responses (GET, HEAD, 200, 206)
 	w.Header().Set("Accept-Ranges", "bytes")
@@ -330,7 +351,7 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	// Handle HEAD requests specifically to learn content length while preventing 403 / 405 rejections from CDNs
 	if r.Method == http.MethodHead {
-		headReq, _ := http.NewRequestWithContext(r.Context(), http.MethodHead, src.RemoteURL, nil)
+		headReq, _ := http.NewRequestWithContext(ctx, http.MethodHead, src.RemoteURL, nil)
 		for k, vv := range src.Headers {
 			for _, v := range vv {
 				headReq.Header.Add(k, v)
@@ -360,7 +381,7 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Fallback probe for CDNs rejecting HEAD: send Range: 0-0 GET to learn content length
-		probeReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, src.RemoteURL, nil)
+		probeReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, src.RemoteURL, nil)
 		for k, vv := range src.Headers {
 			for _, v := range vv {
 				probeReq.Header.Add(k, v)
@@ -387,28 +408,6 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
-	reqID := atomic.AddUint64(&p.nextReqID, 1)
-	ctx, cancel := context.WithCancel(r.Context())
-
-	p.mu.Lock()
-	if p.activeCancels[key] == nil {
-		p.activeCancels[key] = make(map[uint64]context.CancelFunc)
-	}
-	p.activeCancels[key][reqID] = cancel
-	p.mu.Unlock()
-
-	defer func() {
-		p.mu.Lock()
-		if m, ok := p.activeCancels[key]; ok {
-			delete(m, reqID)
-			if len(m) == 0 {
-				delete(p.activeCancels, key)
-			}
-		}
-		p.mu.Unlock()
-		cancel()
-	}()
 
 	req, err := http.NewRequestWithContext(ctx, r.Method, src.RemoteURL, nil)
 	if err != nil {

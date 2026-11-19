@@ -4,11 +4,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
-	"netease-music-mygo/internal/netease"
-	"netease-music-mygo/internal/player/mpv"
+	"waygu-music/internal/player/dlna"
+	"waygu-music/internal/player/mpv"
+	"waygu-music/internal/pluginapi"
 )
 
 // Tests switching between built-in, MPV, and DLNA playback routing.
@@ -36,7 +38,7 @@ func TestEngineSwitching(t *testing.T) {
 	}
 
 	// Cue a track
-	p.Cue([]netease.Track{{ID: 101, Name: "Test Track", Duration: 180000}})
+	p.Cue([]pluginapi.Track{{ID: 101, Name: "Test Track", Duration: 180000}})
 
 	// When not casting, duration comes from track
 	if p.Duration() != 180*time.Second {
@@ -74,7 +76,7 @@ func TestSwitchOutput(t *testing.T) {
 	p := New(func(fn func()) { ch <- fn })
 
 	// Cue a track
-	p.Cue([]netease.Track{{ID: 202, Name: "Switch Track", Duration: 200000}})
+	p.Cue([]pluginapi.Track{{ID: 202, Name: "Switch Track", Duration: 200000}})
 
 	// Switch output to "" (local)
 	p.SwitchOutput("")
@@ -86,6 +88,90 @@ func TestSwitchOutput(t *testing.T) {
 	p.SwitchOutput("non-existent-device")
 	if p.IsCasting() {
 		t.Error("expected IsCasting() to be false for unresolvable device ID")
+	}
+}
+
+// Reset stops a cast and clears playback while keeping the listener's selected output.
+func TestPlayerResetStopsCastPlayback(t *testing.T) {
+	p := New(func(func()) {})
+	defer p.DLNA().Close()
+	device := &dlna.Device{ID: "renderer"}
+	p.DLNA().AddDevice(device)
+	if err := p.DLNA().SelectDevice(device.ID); err != nil {
+		t.Fatal(err)
+	}
+	p.Cue([]pluginapi.Track{{ID: 17, Name: "old track"}})
+	p.TogglePlay()
+	if playing, _, _ := p.DLNA().Status(); !playing {
+		t.Fatal("cast fixture did not start playback")
+	}
+	p.Reset()
+	p.TogglePlay()
+	if playing, _, _ := p.DLNA().Status(); playing || p.Current() != nil || len(p.Queue()) != 0 {
+		t.Fatal("reset left the previous platform playing on the renderer")
+	}
+	if p.DLNA().ActiveDevice() != device {
+		t.Fatal("reset did not retain the selected renderer")
+	}
+}
+
+// MPV appends the next instance's cached filename even when its metadata has no remote URL.
+func TestMPVPrefetchUsesOwningCachedFile(t *testing.T) {
+	if !mpv.Ready() {
+		t.Skip("mpv not available")
+	}
+	audio, err := os.ReadFile("testdata/seek.mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	posted := make(chan func(), 64)
+	p := New(func(fn func()) { posted <- fn })
+	defer p.DLNA().Close()
+	defer func() {
+		p.Reset()
+		if p.mpvOut != nil {
+			p.mpvOut.Close()
+		}
+	}()
+	p.SetUseMPV(true)
+	p.SetMPVConfig(mpv.Config{NullAO: true, Gapless: true})
+	p.Cache = NewCache(t.TempDir(), int64(10*len(audio)))
+	tracks := []pluginapi.Track{
+		{ID: 17, PlatformTrack: pluginapi.PlatformTrack{Source: "library-one", Ref: "track/a"}},
+		{ID: 17, PlatformTrack: pluginapi.PlatformTrack{Source: "library-two", Ref: "track/a"}},
+	}
+	var paths []string
+	for i := range tracks {
+		st := &pluginapi.Stream{Type: "mp3", Level: "exhigh", Size: int64(len(audio))}
+		part := p.Cache.part(st)
+		if part == nil {
+			t.Fatal("unable to create cache fixture")
+		}
+		_, err := part.Write(audio)
+		closeErr := part.Close()
+		if err != nil || closeErr != nil {
+			t.Fatalf("writing cache fixture: %v, %v", err, closeErr)
+		}
+		path, ok := p.Cache.keep(trackCacheRef(p.trackOwner(&tracks[i]), &tracks[i]), st, part.Name(), int64(len(audio)))
+		if !ok {
+			t.Fatal("unable to keep cache fixture")
+		}
+		paths = append(paths, path)
+	}
+	p.PlayQueue(tracks, 0)
+	p.TogglePlay()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for p.mpvOut == nil || p.mpvOut.GetProperty("playlist-count") != "2" {
+		select {
+		case fn := <-posted:
+			fn()
+		case <-deadline.C:
+			t.Fatalf("MPV did not append the cached next song: %s", p.Err())
+		}
+	}
+	if got := p.mpvOut.GetProperty("playlist/1/filename"); got != paths[1] {
+		t.Fatalf("MPV queued %q, want owning instance's cache file %q", got, paths[1])
 	}
 }
 
@@ -111,8 +197,8 @@ func TestPlayerMPVWithProxyHeaders(t *testing.T) {
 	p := New(func(fn func()) { ch <- fn })
 	p.SetUseMPV(true)
 
-	p.ResolveStream = func(tr *netease.Track, level string) (*netease.Stream, error) {
-		return &netease.Stream{
+	p.ResolveStream = func(_ context.Context, tr *pluginapi.Track, level string) (*pluginapi.Stream, error) {
+		return &pluginapi.Stream{
 			URL:  server.URL,
 			Type: "mp3",
 			Header: func() http.Header {
@@ -123,7 +209,7 @@ func TestPlayerMPVWithProxyHeaders(t *testing.T) {
 		}, nil
 	}
 
-	p.PlayQueue([]netease.Track{{ID: 303, Name: "Proxy Track", Duration: 3000}}, 0)
+	p.PlayQueue([]pluginapi.Track{{ID: 303, Name: "Proxy Track", Duration: 3000}}, 0)
 
 	// Pump event loop
 	timeout := time.After(2 * time.Second)
@@ -162,14 +248,14 @@ func TestMPVProgressAndReady(t *testing.T) {
 	p.SetUseMPV(true)
 	p.SetMPVConfig(mpv.Config{NullAO: true})
 
-	p.ResolveStream = func(tr *netease.Track, level string) (*netease.Stream, error) {
-		return &netease.Stream{
+	p.ResolveStream = func(_ context.Context, tr *pluginapi.Track, level string) (*pluginapi.Stream, error) {
+		return &pluginapi.Stream{
 			URL:  "av://lavfi:sine=frequency=1000:duration=60",
 			Type: "mp3",
 		}, nil
 	}
 
-	p.PlayQueue([]netease.Track{{ID: 404, Name: "Test Progress Track", Duration: 60000}}, 0)
+	p.PlayQueue([]pluginapi.Track{{ID: 404, Name: "Test Progress Track", Duration: 60000}}, 0)
 
 	timeout := time.After(3 * time.Second)
 	for p.Loading() {

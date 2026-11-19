@@ -5,26 +5,26 @@ unsigned; if the fork has no macOS certificate secrets, macOS builds are also
 unsigned. Update manifests are signed when `MYGO_UPDATER_PRIVATE_KEY` is
 available.
 
-1. Commit pending work, bring the fork's `release` branch up to date, and run `go test ./internal/...`. The release branch is the only branch used for our published builds:
+1. Commit pending work, bring the fork's `main` branch up to date, and run `go test ./internal/...`:
 
    ```bash
-   git switch release
-   git pull --rebase fork release
+   git switch main
+   git pull --rebase origin main
    ```
 
 2. Bump `version` in `mygo.json`, and add a matching section at the top of `CHANGELOG.md` saying, in Chinese, what changed for people using the app since the last release. Commit both in a commit titled just the version, e.g. `0.2.4`. MyGo's updater shows that section in the app's update window, and the release page takes it as its notes; `mygo build` fails without one.
-3. Push `release` first, and tag only once that push has gone through. Pushing both at once still pushes the tag when the branch is rejected, and the tag starts a release build of a commit that isn't on the fork:
+3. Push `main` first, and tag once that push has gone through. Pushing both at once can start a release build even if the branch push is rejected:
 
    ```bash
-   git push fork release
+   git push origin main
    git tag v0.2.4
-   git push fork v0.2.4
+   git push origin v0.2.4
    ```
 
-   If `release` is rejected, pull again, add what came in to the changelog, amend the version commit, test, and push `release` again before tagging. If a tag went up on the wrong commit anyway, cancel its run, then delete the tag and the draft it made before tagging again:
+   If `main` is rejected, pull again, add what came in to the changelog, amend the version commit, test, and push `main` again before tagging. If a tag went up on the wrong commit anyway, cancel its run, then delete the tag and the draft it made before tagging again:
 
    ```bash
-   git push fork :refs/tags/v0.2.4
+   git push origin :refs/tags/v0.2.4
    gh release delete v0.2.4 --repo vicnoah/mygo-cloudmusic --yes
    ```
 
@@ -58,7 +58,7 @@ available.
 
 ## The speech recognition libraries
 
-Podcast captions run sherpa-onnx, whose libraries the app downloads with the model from the `sherpa-onnx-<version>` release, not from the app's own. They only change with sherpa-onnx's version, in `scripts/sherpa`. Then pack them again, signing the macOS ones with the app's Developer ID (the app's hardened runtime loads no others), commit the `internal/speech/natives.go` it writes, and upload them as a prerelease, which never becomes the latest that updates look for:
+Podcast captions run sherpa-onnx, whose libraries the app downloads with the model from the `sherpa-onnx-<version>` release, not from the app's own. They only change with sherpa-onnx's version, in `scripts/sherpa`. Then pack them again, signing the macOS ones with the app's Developer ID (the app's hardened runtime loads no others), commit the `internal/pluginapi/speech/natives.go` it writes, and upload them as a prerelease, which never becomes the latest that updates look for:
 
 ```bash
 go run ./scripts/sherpa -sign "Developer ID Application: xinyu zeng (GJE9R5VE87)"

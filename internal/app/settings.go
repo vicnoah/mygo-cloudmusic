@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/egoist/mygo"
-	"netease-music-mygo/internal/eq"
-	"netease-music-mygo/internal/platform"
+	"waygu-music/internal/pluginapi"
+	"waygu-music/internal/pluginapi/eq"
 )
 
 // desktopLyricsSettings are the desktop lyric window's persistent choices.
@@ -65,9 +65,6 @@ type settings struct {
 	// Normalize evens out the loudness of tracks, by what NetEase
 	// measured of each.
 	Normalize bool `json:"normalize"`
-	// HotComments shows a song's hot comments in its quiet parts, in
-	// place of the lyrics (quietComment): the listener turns it on.
-	HotComments bool `json:"hotComments"`
 	// Fog fills Now Playing's backdrop with fog of the cover's color,
 	// rising and swelling with the bass: an experiment the listener turns
 	// on.
@@ -75,9 +72,6 @@ type settings struct {
 	// AppIcon is where the app's icon shows on macOS (appIcons); elsewhere
 	// it is always in the notification area.
 	AppIcon string `json:"appIcon"`
-	// Captions writes down episodes as they play, for their captions,
-	// once the listener has downloaded the model.
-	Captions bool `json:"captions"`
 	// DesktopLyricsLocked remembers whether desktop lyrics should start
 	// click-through when shown.
 	DesktopLyricsLocked bool `json:"desktopLyricsLocked,omitempty"`
@@ -109,7 +103,7 @@ type settings struct {
 }
 
 func defaultSettings() settings {
-	s := settings{
+	return settings{
 		NotchActivity: true,
 		Quality:       "exhigh",
 		Appearance:    "system",
@@ -117,11 +111,8 @@ func defaultSettings() settings {
 		Normalize:     true,
 		AppIcon:       "dock-and-menubar",
 		CacheMB:       2048,
-		Captions:      true,
 		EQ:            eq.Default(),
 	}
-	s.Platform = string(platform.FnmusicID)
-	return s
 }
 
 func settingsPath() (string, error) {
@@ -176,11 +167,12 @@ func moveDir(old, dir string) {
 }
 
 // loadSettings reads the settings, or returns the defaults.
-func loadSettings() settings {
+func loadSettings(registrations ...pluginapi.Registration) settings {
 	s := defaultSettings()
 	if path, err := settingsPath(); err == nil {
 		if b, err := os.ReadFile(path); err == nil {
 			json.Unmarshal(b, &s)
+			s.loadLegacyNamespaces(b, registrations)
 		}
 		s.path = path
 	}
@@ -195,7 +187,7 @@ func (s settings) save() error {
 	if path == "" {
 		return nil
 	}
-	b, err := json.MarshalIndent(s, "", "  ")
+	b, err := s.marshalSettings()
 	if err != nil {
 		return err
 	}
@@ -203,6 +195,24 @@ func (s settings) save() error {
 		return err
 	}
 	return os.WriteFile(path, b, 0o600)
+}
+
+func (s settings) marshalSettings() ([]byte, error) {
+	if len(s.legacyNamespaces) == 0 {
+		return json.MarshalIndent(s, "", "  ")
+	}
+	body, err := json.Marshal(s)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, err
+	}
+	for key, raw := range s.legacyNamespaces {
+		fields[key] = raw
+	}
+	return json.MarshalIndent(fields, "", "  ")
 }
 
 // applyAppearance makes the windows light, dark, or follow the system.
@@ -215,25 +225,4 @@ func (s settings) applyAppearance() {
 	default:
 		mygo.Theme.SetSource(mygo.ThemeSystem)
 	}
-}
-
-// qualityLevel is the stream level NetEase names a quality by.
-var qualityLevels = []struct{ level, label string }{
-	{"standard", "标准（128k）"},
-	{"higher", "较高（192k）"},
-	{"exhigh", "极高（320k）"},
-	{"lossless", "无损（FLAC）"},
-	{"hires", "Hi-Res"},
-}
-
-// cacheLimits are the sizes the song cache may take, in megabytes.
-var cacheLimits = []struct {
-	mb    int
-	label string
-}{
-	{0, "关闭"},
-	{1024, "1 GB"},
-	{2048, "2 GB"},
-	{5120, "5 GB"},
-	{10240, "10 GB"},
 }

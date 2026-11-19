@@ -2,40 +2,14 @@ package player
 
 import (
 	"context"
-	"time"
+	"errors"
 
-	"netease-music-mygo/internal/netease"
+	"waygu-music/internal/pluginapi"
 )
 
 // maxSkipped is how many songs that cannot play in a row stop the player,
 // with the last one's error shown.
 const maxSkipped = 3
-
-// AudioStream is the player-owned decoded stream contract exposed to platform
-// adapters that supply a decoder. Its source method remains private to this
-// package, so external adapters can only receive and close the stream.
-type AudioStream = stream
-
-// SegmentedSource is an encoded stream made of ordered pieces. Providers
-// adapt their own HLS or chunked response to this interface; the player owns
-// only decoder and seek/preroll behavior.
-type SegmentedSource interface {
-	SegmentCount() int
-	SegmentDuration(int) time.Duration
-	TotalDuration() time.Duration
-	FetchSegment(context.Context, int) ([]byte, error)
-	Close()
-}
-
-// OpenSegmentedStream decodes a provider's segmented MP3 source through the
-// shared player pipeline.
-func OpenSegmentedStream(source SegmentedSource) (AudioStream, error) {
-	stream, err := openSegmentedStream(source)
-	if err != nil && source != nil {
-		source.Close()
-	}
-	return stream, err
-}
 
 // Platform extension seam.
 //
@@ -48,7 +22,7 @@ func OpenSegmentedStream(source SegmentedSource) (AudioStream, error) {
 // PlayList plays the loaded part of a provider list and asks more for the
 // remainder as playback approaches its end. It is the shared queue seam for
 // platform pagers; the player never knows how a page is fetched.
-func (p *Player) PlayList(tracks []netease.Track, start int, more func(func([]netease.Track))) {
+func (p *Player) PlayList(tracks []pluginapi.Track, start int, more func(func([]pluginapi.Track))) {
 	if len(tracks) == 0 {
 		return
 	}
@@ -58,8 +32,8 @@ func (p *Player) PlayList(tracks []netease.Track, start int, more func(func([]ne
 }
 
 // AppendQueue adds songs to the current queue without replacing what is
-// playing. Duplicate song IDs are ignored, just as radio refills are.
-func (p *Player) AppendQueue(tracks []netease.Track) {
+// playing. Duplicate tracks from the same instance are ignored.
+func (p *Player) AppendQueue(tracks []pluginapi.Track) {
 	if p == nil || len(tracks) == 0 {
 		return
 	}
@@ -93,27 +67,39 @@ func (p *Player) Reset() {
 	p.err = ""
 	p.shuffle = false
 	p.repeat = RepeatOff
+	if p.IsCasting() {
+		p.dlnaCtrl.Stop()
+	}
 	p.sync()
 }
 
+// PlatformPlayer holds the host callbacks used to look up media by track.
 type PlatformPlayer struct {
-	started bool // the current track has been reported as started
-	// Stream resolves audio for the active platform. Nil uses NetEase's
-	// original resolver, preserving the upstream default path.
-	ResolveStream func(*netease.Track, string) (*netease.Stream, error)
-	// Artwork and Lyrics resolve optional platform data. Nil keeps the
-	// upstream NetEase requests.
-	Artwork       func(*netease.Track) ([]byte, error)
-	ResolveLyrics func(*netease.Track) (string, string, string, error)
-	ResolveAudio  func(*netease.Track, string) (*netease.Stream, AudioStream, error)
-	// Started hears a track once, as it first begins to play.
-	Started func(*netease.Track)
+	started     bool // the current track has been reported as started
+	loadContext context.Context
+	cancelLoad  context.CancelFunc
+
+	ResolveStream    func(context.Context, *pluginapi.Track, string) (*pluginapi.Stream, error)
+	ArtworkURL       func(*pluginapi.Track) string
+	Artwork          func(context.Context, *pluginapi.Track) ([]byte, error)
+	ResolveLyrics    func(context.Context, *pluginapi.Track) (string, string, string, error)
+	ResolveSegments  func(context.Context, *pluginapi.Track, bool) (*pluginapi.Stream, pluginapi.SegmentedSource, error)
+	TrackPreferences func(*pluginapi.Track) pluginapi.AudioPreferences
+	StreamError      func(*pluginapi.Track, error) string
+	Started          func(*pluginapi.Track)
+}
+
+func (p *Player) trackContext() context.Context {
+	if p.loadContext != nil {
+		return p.loadContext
+	}
+	return context.Background()
 }
 
 // acceptRefill applies a provider queue refill without making player.go know
 // how an exhausted feed should end. Returning false tells the caller that no
 // tracks were appended and playback should stop waiting for more.
-func (p *Player) acceptRefill(more []netease.Track) bool {
+func (p *Player) acceptRefill(more []pluginapi.Track) bool {
 	if len(more) == 0 && p.radio == "" {
 		p.feed = nil
 		if p.awaiting {
@@ -127,43 +113,51 @@ func (p *Player) acceptRefill(more []netease.Track) bool {
 	return true
 }
 
-// resolveArtwork keeps the provider fallback outside player.go. A nil hook is
-// the unchanged NetEase path.
-func (p *Player) resolveArtwork(t *netease.Track) ([]byte, error) {
+func (p *Player) coverURL(t *pluginapi.Track) string {
+	if p.ArtworkURL != nil {
+		return p.ArtworkURL(t)
+	}
+	return t.Album.PicURL
+}
+
+func (p *Player) resolveArtwork(ctx context.Context, t *pluginapi.Track) ([]byte, error) {
 	if p.Artwork != nil {
-		return p.Artwork(t)
+		return p.Artwork(ctx, t)
 	}
-	return netease.Fetch(netease.Sized(t.Album.PicURL, 600))
+	return nil, pluginapi.ErrUnavailable
 }
 
-// resolveLyrics keeps provider lyric lookup behind the same optional hook.
-func (p *Player) resolveLyrics(t *netease.Track) (string, string, string, error) {
+func (p *Player) resolveLyrics(ctx context.Context, t *pluginapi.Track) (string, string, string, error) {
 	if p.ResolveLyrics != nil {
-		return p.ResolveLyrics(t)
+		return p.ResolveLyrics(ctx, t)
 	}
-	return netease.Lyrics(t.ID)
+	return "", "", "", pluginapi.ErrUnavailable
 }
 
-// resolveAudio reports whether a provider handled the stream. A nil result
-// means that the shared URL/cache decoder should continue with its usual path.
-func (p *Player) resolveAudio(t *netease.Track, level string) (*netease.Stream, stream, error, bool) {
-	if p.ResolveAudio == nil || t.Source == "" {
+// resolveAudio reports whether a source was resolved or failed to open.
+func (p *Player) resolveAudio(ctx context.Context, t *pluginapi.Track, advanced bool) (*pluginapi.Stream, stream, error, bool) {
+	if p.ResolveSegments == nil {
 		return nil, nil, nil, false
 	}
-	info, decoded, err := p.ResolveAudio(t, level)
-	if decoded == nil && err == nil {
+	info, source, err := p.ResolveSegments(ctx, t, advanced)
+	if err != nil {
+		return nil, nil, err, true
+	}
+	if source == nil {
 		return nil, nil, nil, false
+	}
+	decoded, err := openSegmentedStream(source)
+	if err != nil {
+		source.Close()
 	}
 	return info, decoded, err, true
 }
 
-// resolveStream lets a provider supply a signed URL while preserving the
-// original NetEase resolver when no hook is installed or the track is native.
-func (p *Player) resolveStream(t *netease.Track, level string) (*netease.Stream, error) {
+func (p *Player) resolveStream(ctx context.Context, t *pluginapi.Track, level string) (*pluginapi.Stream, error) {
 	if p.ResolveStream != nil {
-		return p.ResolveStream(t, level)
+		return p.ResolveStream(ctx, t, level)
 	}
-	return netease.SongURL(t.ID, level)
+	return nil, errors.New("no playback media resolver configured")
 }
 
 // markStarted reports the current track once, as it first begins to play.

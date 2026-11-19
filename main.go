@@ -3,11 +3,12 @@ package main
 import (
 	"log"
 
-	"netease-music-mygo/internal/app"
+	"waygu-music/internal/app"
+	"waygu-music/internal/builtin"
 )
 
 func main() {
-	if err := app.Run(); err != nil {
+	if err := app.Run(builtin.Platforms()); err != nil {
 		log.Fatal(err)
 	}
 }

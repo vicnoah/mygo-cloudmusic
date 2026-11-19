@@ -3,13 +3,12 @@ package player
 import (
 	"math"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/audio"
 
-	"netease-music-mygo/internal/netease"
+	"waygu-music/internal/pluginapi"
 )
 
 func TestPlayEmptyQueue(t *testing.T) {
@@ -34,7 +33,7 @@ func (silence) Read(b []float32) (int, error) { clear(b); return len(b), nil }
 func posted() (chan func(), *Player) {
 	ch := make(chan func(), 16)
 	p := New(func(fn func()) { ch <- fn })
-	p.Cue([]netease.Track{{ID: 1, Name: "一", Duration: 600000}})
+	p.Cue([]pluginapi.Track{{ID: 1, Name: "一", Duration: 600000}})
 	out := audio.NewPlayer(silence{})
 	out.SetVolume(0)
 	out.Play()
@@ -58,7 +57,7 @@ func TestStartedReportsOnce(t *testing.T) {
 	ch, p := posted()
 	defer p.out.Close()
 	var started []int64
-	p.Started = func(tr *netease.Track) { started = append(started, tr.ID) }
+	p.Started = func(tr *pluginapi.Track) { started = append(started, tr.ID) }
 	p.TogglePlay()
 	next(t, ch)
 	p.TogglePlay()
@@ -143,11 +142,11 @@ func TestSeekTwicePlaysOn(t *testing.T) {
 // in it already.
 func TestRadioRefills(t *testing.T) {
 	p := &Player{at: -1}
-	p.Cue([]netease.Track{{ID: 1}, {ID: 2}})
+	p.Cue([]pluginapi.Track{{ID: 1}, {ID: 2}})
 	asked := 0
-	p.AttachRadio("fm:DEFAULT", func(got func([]netease.Track)) {
+	p.AttachRadio("fm:DEFAULT", func(got func([]pluginapi.Track)) {
 		asked++
-		got([]netease.Track{{ID: 2}, {ID: 3}})
+		got([]pluginapi.Track{{ID: 2}, {ID: 3}})
 	})
 	if asked != 1 || len(p.Queue()) != 3 || p.Queue()[2].ID != 3 {
 		t.Fatalf("asked %d, queue %v", asked, p.Queue())
@@ -164,15 +163,15 @@ func TestRadioRefills(t *testing.T) {
 
 func TestNormGain(t *testing.T) {
 	for _, c := range []struct {
-		st   *netease.Stream
+		st   *pluginapi.Stream
 		want float64
 	}{
 		{nil, 1},
-		{&netease.Stream{}, 1},
-		{&netease.Stream{Gain: -6.6, Peak: 1}, math.Pow(10, -6.6/20)},
+		{&pluginapi.Stream{}, 1},
+		{&pluginapi.Stream{Gain: -6.6, Peak: 1}, math.Pow(10, -6.6/20)},
 		// Quiet, it is lifted, but not past its peak.
-		{&netease.Stream{Gain: 3, Peak: 0.8}, 1.25},
-		{&netease.Stream{Gain: -4, Peak: 0}, math.Pow(10, -4.0/20)},
+		{&pluginapi.Stream{Gain: 3, Peak: 0.8}, 1.25},
+		{&pluginapi.Stream{Gain: -4, Peak: 0}, math.Pow(10, -4.0/20)},
 	} {
 		if g := normGain(c.st); math.Abs(g-c.want) > 1e-9 {
 			t.Errorf("%+v: %v, want %v", c.st, g, c.want)
@@ -185,31 +184,31 @@ func TestNormGain(t *testing.T) {
 func TestCache(t *testing.T) {
 	dir := t.TempDir()
 	c := NewCache(dir, 400)
-	store := func(id int64, st *netease.Stream, n int) {
+	store := func(id int64, st *pluginapi.Stream, n int) {
 		f := c.part(st)
 		f.Write(make([]byte, n))
 		f.Close()
-		c.keep(id, st, f.Name(), int64(n))
+		c.keep(cacheTestRef(id), st, f.Name(), int64(n))
 	}
-	store(1, &netease.Stream{Level: "lossless", Type: "flac", Gain: -3}, 100)
-	dl, st, ok := c.lookup(1, "exhigh")
+	store(1, &pluginapi.Stream{Level: "lossless", Type: "flac", Gain: -3}, 100)
+	dl, st, ok := c.lookup(cacheTestRef(1), "exhigh")
 	if !ok || dl.size != 100 || st.Type != "flac" || st.Gain != -3 {
 		t.Fatalf("lookup: %v %+v", ok, st)
 	}
 	dl.Close()
-	if _, _, ok := c.lookup(1, "hires"); ok {
+	if _, _, ok := c.lookup(cacheTestRef(1), "hires"); ok {
 		t.Error("found a lossless song for Hi-Res")
 	}
 	old := time.Now().Add(-time.Hour)
-	os.Chtimes(filepath.Join(dir, "1-lossless.flac"), old, old)
-	store(2, &netease.Stream{Level: "exhigh", Type: "mp3"}, 100)
-	store(3, &netease.Stream{Level: "exhigh", Type: "mp3"}, 100)
-	store(4, &netease.Stream{Level: "exhigh", Type: "mp3"}, 100)
-	store(5, &netease.Stream{Level: "exhigh", Type: "mp3"}, 100)
-	if _, _, ok := c.lookup(1, "standard"); ok {
+	os.Chtimes(c.filePath(cacheTestRef(1), "lossless"), old, old)
+	store(2, &pluginapi.Stream{Level: "exhigh", Type: "mp3"}, 100)
+	store(3, &pluginapi.Stream{Level: "exhigh", Type: "mp3"}, 100)
+	store(4, &pluginapi.Stream{Level: "exhigh", Type: "mp3"}, 100)
+	store(5, &pluginapi.Stream{Level: "exhigh", Type: "mp3"}, 100)
+	if _, _, ok := c.lookup(cacheTestRef(1), "standard"); ok {
 		t.Error("kept the song played longest ago")
 	}
-	if dl, _, ok := c.lookup(5, "standard"); !ok {
+	if dl, _, ok := c.lookup(cacheTestRef(5), "standard"); !ok {
 		t.Error("dropped the song just kept")
 	} else {
 		dl.Close()
@@ -227,10 +226,10 @@ func TestCache(t *testing.T) {
 // it queued after, and asks it for no more.
 func TestEndRadio(t *testing.T) {
 	p := &Player{at: -1}
-	p.Cue([]netease.Track{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}})
+	p.Cue([]pluginapi.Track{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}})
 	p.at, p.track = 1, &p.queue[1]
 	asked := 0
-	p.AttachRadio("heart", func(got func([]netease.Track)) { asked++ })
+	p.AttachRadio("heart", func(got func([]pluginapi.Track)) { asked++ })
 	p.EndRadio()
 	if p.Radio() != "" || p.Current().ID != 2 {
 		t.Fatalf("radio %q, current %v", p.Radio(), p.Current())
@@ -256,4 +255,8 @@ func TestPositionWhileLoading(t *testing.T) {
 	if pos := p.Position(); pos != 15*time.Second {
 		t.Fatalf("Position while loading with pending = %v, want 15s", pos)
 	}
+}
+
+func cacheTestRef(id int64) cacheTrack {
+	return trackCacheRef("test", &pluginapi.Track{ID: id})
 }

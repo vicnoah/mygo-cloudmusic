@@ -16,7 +16,8 @@ import (
 	"github.com/egoist/mygo/audio"
 	gomp3 "github.com/hajimehoshi/go-mp3"
 
-	"netease-music-mygo/internal/netease"
+	"waygu-music/internal/pluginapi"
+	"waygu-music/internal/pluginapi/network"
 )
 
 // streamClient fetches audio streams. A NAS on the LAN answers over HTTPS
@@ -112,7 +113,7 @@ func (d *download) run(ctx context.Context, url string, header func() http.Heade
 		finish(err)
 		return
 	}
-	req.Header.Set("User-Agent", netease.UserAgent)
+	req.Header.Set("User-Agent", network.BrowserUserAgent)
 	if header != nil {
 		for k, v := range header() {
 			req.Header[k] = v
@@ -549,7 +550,7 @@ func frameSize(b []byte) int {
 
 const (
 	fftSize = 1024
-	Bands   = 24
+	Bands   = pluginapi.SpectrumBands
 )
 
 type spectrum struct {

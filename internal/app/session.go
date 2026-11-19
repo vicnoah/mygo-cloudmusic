@@ -8,7 +8,7 @@ import (
 
 	"github.com/egoist/mygo"
 
-	"netease-music-mygo/internal/player"
+	"waygu-music/internal/player"
 )
 
 // Where playback was left is kept in session.json in the user data
@@ -53,7 +53,11 @@ func (a *app) keepSession() {
 		return
 	}
 	a.sessionDue = true
+	generation := a.platformGeneration
 	sessionAfter(sessionEvery, func() {
+		if a.platformGeneration != generation {
+			return
+		}
 		a.sessionDue = false
 		a.saveSession()
 		if a.pl.Playing() {
@@ -68,31 +72,25 @@ var sessionAfter = func(d time.Duration, fn func()) {
 	time.AfterFunc(d, func() { mygo.RunOnMain(fn) })
 }
 
-// restoreSession picks up playback where it was left, paused, once the
-// listener's session is back: the songs they may play depend on it.
-func (a *app) restoreSession() {
-	if a.restored {
-		return
+// LoadSession offers the saved queue once, after the active plugin is ready.
+func (p playbackContinuity) LoadSession() (player.Session, bool) {
+	if !p.active() || p.a.restored {
+		return player.Session{}, false
 	}
+	a := p.a
 	a.restored = true
 	path, err := sessionPath()
 	if err != nil {
-		return
+		return player.Session{}, false
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return
+		return player.Session{}, false
 	}
 	var s player.Session
-	if json.Unmarshal(b, &s) != nil {
-		return
-	}
-	if !a.sessionBelongsToActivePlatform(s) {
-		return
+	if json.Unmarshal(b, &s) != nil || !a.sessionBelongsToActivePlatform(s) {
+		return player.Session{}, false
 	}
 	a.savedSession = string(b)
-	a.pl.Restore(s)
-	if s.Radio != "" && a.pl.Current() != nil {
-		a.pl.AttachRadio(s.Radio, a.radioFeed(s.Radio))
-	}
+	return s, true
 }

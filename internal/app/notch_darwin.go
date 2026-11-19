@@ -104,13 +104,6 @@ func menuBarScreen() objc.ID {
 }
 
 // windowFrame returns a window's frame, for checking where it went.
-func windowFrame(handle uintptr) (x, y, w, h float64) {
-	f := objc.Send[nsRect](objc.ID(handle), objc.RegisterName("frame"))
-	return f.Origin.X, f.Origin.Y, f.Size.W, f.Size.H
-}
-
-// watchPointer calls fn on the main thread as the pointer moves, over this
-// app's windows or another's, until stop is called.
 func watchPointer(fn func()) (stop func(), ok bool) {
 	// mouse moved, and left, right and other mouse dragged
 	const mask = uint64(1<<5 | 1<<6 | 1<<7 | 1<<27)

@@ -2,10 +2,11 @@ package app
 
 import (
 	"image"
+	cover "waygu-music/internal/pluginapi/artwork"
 
 	"github.com/egoist/mygo/ui"
 
-	"netease-music-mygo/internal/netease"
+	"waygu-music/internal/pluginapi/network"
 )
 
 // Artwork platform extension seam.
@@ -14,23 +15,23 @@ import (
 // upstream art cache declaration. The cache itself depends only on this
 // small provider-neutral extension state.
 type artPlatformState struct {
-	fetch      func(string) ([]byte, error)
+	fetch      func() func(string) ([]byte, error)
 	generation func() uint64
 }
 
 func newArtPlatformState() artPlatformState {
-	return artPlatformState{fetch: netease.Fetch, generation: func() uint64 { return 0 }}
+	return artPlatformState{generation: func() uint64 { return 0 }}
 }
 
 func loadArtWith(url string, fetch func(string) ([]byte, error)) (*ui.Bitmap, image.Image, int, error) {
 	if fetch == nil {
-		fetch = netease.Fetch
+		fetch = network.Fetch
 	}
 	b, err := fetch(url)
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	bmp, img, err := decodeArt(b)
+	bmp, img, err := cover.DecodeBitmap(b)
 	return bmp, img, len(b), err
 }
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"netease-music-mygo/internal/eq"
+	"waygu-music/internal/pluginapi/eq"
 )
 
 // Tests metadata and path resolution for libmpv assets across platforms.

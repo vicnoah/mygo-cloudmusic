@@ -1,12 +1,11 @@
 package app
 
 import (
-	"fmt"
 	"path/filepath"
 
 	"github.com/egoist/mygo"
 
-	"netease-music-mygo/internal/player"
+	"waygu-music/internal/player"
 )
 
 // newSongCache returns the cache of songs played, in the app's cache
@@ -55,17 +54,5 @@ func (a *app) clearCache() {
 			cache.Clear()
 			a.measureCache()
 		}()
-	}
-}
-
-// cacheUsage says how much the cache takes, once measured.
-func (a *app) cacheUsage() string {
-	switch n := a.cacheUsed; {
-	case n < 0:
-		return "正在计算已用空间…"
-	case n >= 1<<30:
-		return fmt.Sprintf("已用 %.1f GB", float64(n)/(1<<30))
-	default:
-		return fmt.Sprintf("已用 %d MB", n>>20)
 	}
 }
