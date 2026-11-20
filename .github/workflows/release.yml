@@ -62,4 +62,22 @@ jobs:
           test "$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
           go tool mygo build -sign - -skip-dmg -skip-notarize -upload \
             -platform "darwin/amd64,darwin/arm64,windows/amd64,windows/arm64,linux/amd64,linux/arm64"
-          gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft=false --latest
+          version=${GITHUB_REF_NAME#v}
+          slug=$(jq -er .slug mygo.json)
+          assets=$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[] | select(.size > 0) | .name')
+          require_asset() {
+            if ! grep -Fxq -- "$1" <<< "$assets"; then
+              printf 'Missing release asset %s\n' "$1" >&2
+              return 1
+            fi
+          }
+          require_asset SHA256SUMS
+          for arch in amd64 arm64; do
+            require_asset "$slug-setup-$version-$arch.exe"
+            for os in darwin linux windows; do
+              require_asset "$slug-$version-$os-$arch.tar.gz"
+              require_asset "update-$os-$arch.json"
+            done
+          done
+          gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest

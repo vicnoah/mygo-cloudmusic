@@ -2,7 +2,7 @@
   "name": "Wagyu Music",
   "identifier": "dev.egoist.cloudmusic",
   "slug": "wagyu-music",
-  "version": "0.2.28-alpha.2",
+  "version": "0.2.28",
   "out": "build",
   "updates": {
     "publicKey": "j48t3n7ieAE6ZSiAqdQVpQWSdlsg1BPoxwym3bXqXJ8=",
