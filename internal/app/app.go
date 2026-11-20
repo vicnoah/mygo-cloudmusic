@@ -126,8 +126,13 @@ func run(registrations []appplatform.Registration, managed bool) error {
 	a.useUpdater()
 	linkScheme := "wagyu-music"
 	if managed {
-		if mygo.IsDev() {
+		dev := mygo.IsDev()
+		if dev {
 			linkScheme += "-dev"
+		}
+		// On Windows an in-app update replaces the executable without running
+		// the installer that adds the protocol handler.
+		if dev || runtime.GOOS == "windows" && !mygo.App.IsURLSchemeRegistered(linkScheme) {
 			if err := mygo.App.RegisterURLScheme(linkScheme); err != nil {
 				log.Print(err)
 			}
