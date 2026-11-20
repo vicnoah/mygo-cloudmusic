@@ -5,10 +5,12 @@ import (
 
 	"waygu-music/internal/app"
 	"waygu-music/internal/builtin"
+	"waygu-music/internal/platformcatalog"
 )
 
 func main() {
-	if err := app.Run(builtin.Platforms()); err != nil {
+	platforms := append(builtin.Platforms(), platformcatalog.ExternalPlatforms()...)
+	if err := app.RunManaged(platforms); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -1,6 +1,8 @@
 package player
 
 import (
+	"context"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -10,8 +12,56 @@ import (
 	"testing"
 	"time"
 
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
+
+// Revoking a PCM activation wakes an incomplete download without stopping the main decoder.
+func TestPCMRevocationWakesDownloadReader(t *testing.T) {
+	encoded, err := os.ReadFile("testdata/seek.flac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dl := downloaded(encoded[:len(encoded)/2])
+	dl.done = false
+	dl.size = int64(len(encoded))
+	main, err := openStream(dl, 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer main.Close()
+	activation, revoke := context.WithCancel(context.Background())
+	defer revoke()
+	pcm, err := openShared(context.Background(), activation, dl, 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pcm.Close()
+	if n, err := pcm.Read(make([]float32, 2048)); n == 0 || err != nil {
+		t.Fatalf("initial PCM = %d samples, %v", n, err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		buf := make([]float32, 4096)
+		for {
+			if _, err := pcm.Read(buf); err != nil {
+				result <- err
+				return
+			}
+		}
+	}()
+	revoke()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("PCM read = %v, want cancellation", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("revoked PCM still waits for download bytes")
+	}
+	if n, err := main.Read(make([]float32, 2048)); n == 0 || err != nil {
+		t.Fatalf("main decoder = %d samples, %v", n, err)
+	}
+}
 
 func TestFrameSize(t *testing.T) {
 	// MPEG-1 layer III, 320 kbps, 44.1 kHz, no padding.
@@ -60,7 +110,8 @@ func TestMP3SeekIsClean(t *testing.T) {
 	}
 	ref := decodeAll(t, b)
 	dl := downloaded(b)
-	s, err := openMP3Stream(dl, int64(len(ref)/2)*1000/44100)
+	view := downloadView{download: dl, ctx: context.Background()}
+	s, err := openMP3Stream(view, int64(len(ref)/2)*1000/44100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +127,7 @@ func TestMP3SeekIsClean(t *testing.T) {
 		var at int64
 		if from := frame - preroll; from > 0 {
 			off := s.start + int64(float64(dl.size-s.start)*float64(from)/float64(s.frames))
-			off = findFrame(dl, off)
+			off = findFrame(view, off)
 			k := int64(0)
 			for p := s.start; p < off; p += int64(frameSize(dl.peek(p, 4))) {
 				k++
@@ -133,7 +184,7 @@ func TestFLACMetadataLength(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := decodeAll(t, b)
-	start, err := flacDataStart(downloaded(b))
+	start, err := flacDataStart(downloadView{download: downloaded(b), ctx: context.Background()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +239,7 @@ func TestStreamIntoCache(t *testing.T) {
 	ref := decodeAll(t, b)
 
 	st := &pluginapi.Stream{URL: srv.URL + "/whole", Size: int64(len(b)), Level: "exhigh", Type: "mp3"}
-	s, err := openStream(c.download(cacheTestRef(1), st), int64(len(ref)/2)*1000/44100)
+	s, err := openStream(c.download(t.Context(), cacheTestRef(1), st), int64(len(ref)/2)*1000/44100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +262,7 @@ func TestStreamIntoCache(t *testing.T) {
 		dl.Close()
 	}
 
-	cut := c.download(cacheTestRef(2), &pluginapi.Stream{URL: srv.URL + "/cut", Size: int64(len(b)), Level: "exhigh", Type: "mp3"})
+	cut := c.download(t.Context(), cacheTestRef(2), &pluginapi.Stream{URL: srv.URL + "/cut", Size: int64(len(b)), Level: "exhigh", Type: "mp3"})
 	cut.waitFor(int64(len(b) / 2))
 	cut.Close()
 	for start := time.Now(); time.Since(start) < 2*time.Second; time.Sleep(10 * time.Millisecond) {
@@ -252,12 +303,12 @@ func TestSharedStream(t *testing.T) {
 		}
 	}
 
-	dl := c.download(cacheTestRef(1), &pluginapi.Stream{URL: srv.URL, Size: int64(len(b)), Level: "exhigh", Type: "mp3"})
+	dl := c.download(t.Context(), cacheTestRef(1), &pluginapi.Stream{URL: srv.URL, Size: int64(len(b)), Level: "exhigh", Type: "mp3"})
 	playing, err := openStream(dl, ms)
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared, err := openShared(dl, ms)
+	shared, err := openShared(context.Background(), context.Background(), dl, ms)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +323,7 @@ func TestSharedStream(t *testing.T) {
 		t.Fatal("not kept")
 	}
 	playing, _ = openStream(kept, ms)
-	shared, err = openShared(kept, ms)
+	shared, err = openShared(context.Background(), context.Background(), kept, ms)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +332,7 @@ func TestSharedStream(t *testing.T) {
 		t.Errorf("decoded %d of %d samples after the stream playing closed", len(got), len(ref))
 	}
 	shared.Close()
-	if _, err := openShared(kept, ms); err == nil {
+	if _, err := openShared(context.Background(), context.Background(), kept, ms); err == nil {
 		t.Error("shared a song let go")
 	}
 }
@@ -300,7 +351,7 @@ func TestCacheKeepsOnlyKnownLevels(t *testing.T) {
 	dir := filepath.Join(root, "cache")
 	c := NewCache(dir, 1<<30)
 
-	dl := c.download(cacheTestRef(1), &pluginapi.Stream{URL: srv.URL, Size: int64(len(b)), Level: "/../../pwned", Type: "mp3"})
+	dl := c.download(t.Context(), cacheTestRef(1), &pluginapi.Stream{URL: srv.URL, Size: int64(len(b)), Level: "/../../pwned", Type: "mp3"})
 	dl.waitFor(int64(len(b)))
 	dl.Close()
 	for start := time.Now(); time.Since(start) < 2*time.Second; time.Sleep(10 * time.Millisecond) {

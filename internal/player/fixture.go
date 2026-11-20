@@ -5,8 +5,8 @@ import (
 
 	"github.com/egoist/mygo/audio"
 
-	"waygu-music/internal/pluginapi"
-	"waygu-music/internal/pluginapi/lyrics"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi/lyrics"
 )
 
 // These set a player up as it would be after loading, without loading
@@ -15,6 +15,7 @@ import (
 // Cue makes tracks the queue, in order, with the first current.
 func (p *Player) Cue(tracks []pluginapi.Track) {
 	p.queue = tracks
+	p.queueRevision++
 	p.order = make([]int, len(tracks))
 	for i := range p.order {
 		p.order[i] = i

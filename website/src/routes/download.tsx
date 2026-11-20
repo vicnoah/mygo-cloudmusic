@@ -13,11 +13,16 @@ type OS = 'mac' | 'windows' | 'linux'
 
 // A download of a platform: the asset of the latest release it is, found by
 // its name, as `mygo build` names installers.
-type Build = { label: string; kind: string; match: (name: string) => boolean; primary?: boolean }
+type Build = { label: string; kind?: string; match: (name: string) => boolean; primary?: boolean }
 
 const has = (...parts: string[]) => (name: string) => {
   const n = name.toLowerCase()
   return parts.every((p) => n.includes(p))
+}
+
+const macBuild = (arch: string) => (name: string) => {
+  const n = name.toLowerCase()
+  return n.includes(arch) && (n.endsWith('.dmg') || has('darwin')(n) && (n.endsWith('.zip') || n.endsWith('.tar.gz')))
 }
 
 const platforms: { os: OS; name: string; note: string; builds: Build[] }[] = [
@@ -26,8 +31,8 @@ const platforms: { os: OS; name: string; note: string; builds: Build[] }[] = [
     name: 'macOS',
     note: 'macOS 13 或更新',
     builds: [
-      { label: 'Apple 芯片', kind: '.dmg', match: has('arm64', '.dmg'), primary: true },
-      { label: 'Intel', kind: '.dmg', match: has('amd64', '.dmg') },
+      { label: 'Apple 芯片', match: macBuild('arm64'), primary: true },
+      { label: 'Intel', match: macBuild('amd64') },
     ],
   },
   {
@@ -56,7 +61,11 @@ const installSh = `curl -fsSL ${repo}/releases/latest/download/install.sh | sh`
 const installPs = `irm ${repo}/releases/latest/download/install.ps1 | iex`
 
 // A build's asset; a build the release has none of links to the release.
-const asset = (b: Build) => release.assets.find((a) => b.match(a.name))
+const asset = (b: Build) =>
+  release.assets.find((a) => b.match(a.name) && a.name.endsWith('.dmg')) ??
+  release.assets.find((a) => b.match(a.name))
+
+const buildKind = (b: Build) => b.kind ?? asset(b)?.name.match(/(\.dmg|\.zip|\.tar\.gz)$/)?.[0]
 
 function detectOS(): OS | undefined {
   const ua = navigator.userAgent
@@ -116,7 +125,7 @@ function Download() {
                       >
                         <Icon name="download" size={16} />
                         <span class="build-label">{b.label}</span>
-                        <span class="build-kind">{b.kind}</span>
+                        <span class="build-kind">{buildKind(b)}</span>
                         <Show when={asset(b)}>{(a) => <span class="build-size">{megabytes(a().size)}</span>}</Show>
                       </a>
                     )}

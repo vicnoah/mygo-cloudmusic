@@ -19,7 +19,7 @@ import (
 // before, so a seek lands on the very sample: decoding from the frame that
 // holds it, found by its header near where the bytes say it is.
 type flacStream struct {
-	dl    *download
+	dl    downloadView
 	info  *meta.StreamInfo
 	start int64 // the first frame's byte, after the metadata
 	r     *bufio.Reader
@@ -31,7 +31,7 @@ type flacStream struct {
 	once  sync.Once
 }
 
-func openFLACStream(dl *download) (*flacStream, error) {
+func openFLACStream(dl downloadView) (*flacStream, error) {
 	start, err := flacDataStart(dl)
 	if err != nil {
 		return nil, err
@@ -52,7 +52,7 @@ func openFLACStream(dl *download) (*flacStream, error) {
 
 // flacDataStart returns where a FLAC file's first frame starts, after its
 // ID3 tag, if any, and its metadata blocks.
-func flacDataStart(dl *download) (int64, error) {
+func flacDataStart(dl downloadView) (int64, error) {
 	off := id3Size(dl)
 	if dl.waitFor(off+4) < off+4 || string(dl.peek(off, 4)) != "fLaC" {
 		return 0, errors.New("flac: not a FLAC file")
@@ -186,7 +186,7 @@ func (s *flacStream) SetPosition(target int64) error {
 // before end starts, and the frame of sound it starts with. Bytes that
 // only look like a frame's header within the audio fail its checksums.
 func (s *flacStream) frameAfter(off, end int64) (int64, int64, bool) {
-	w := window{dl: s.dl}
+	w := window{dl: s.dl.download}
 	for ; off+2 < end; off++ {
 		if s.dl.waitFor(off+2) < off+2 {
 			return 0, 0, false
@@ -223,4 +223,4 @@ func (s *flacStream) Close() error {
 	return nil
 }
 
-func (s *flacStream) source() (*download, *spectrum) { return s.dl, s.spec }
+func (s *flacStream) source() (*download, *spectrum) { return s.dl.download, s.spec }

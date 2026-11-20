@@ -6,28 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi/artwork"
 )
-
-// Configured artwork fetchers handle platform-private cover URLs before decoding.
-func TestLoadArtWithPlatformFetcher(t *testing.T) {
-	b, err := os.ReadFile("../pluginapi/artwork/testdata/animated.webp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	called := ""
-	_, img, _, err := loadArtWith("service://cover/abc", func(url string) ([]byte, error) { called = url; return b, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if called != "service://cover/abc" || img.Bounds().Dx() != 24 {
-		t.Fatalf("fetch=%q image=%v", called, img.Bounds())
-	}
-}
 
 // A cached legacy cover cannot satisfy the same cover URL requested by another plugin.
 func TestArtworkCacheKeepsLegacyCoversByPlatform(t *testing.T) {
-	b, err := os.ReadFile("../pluginapi/artwork/testdata/animated.webp")
+	b, err := os.ReadFile("testdata/animated.webp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +29,7 @@ func TestArtworkCacheKeepsLegacyCoversByPlatform(t *testing.T) {
 		}))
 	}
 	posted := make(chan func(), 2)
-	a.art = newArtCache(func(fn func()) { posted <- fn })
+	a.art = artwork.NewCache(func(fn func()) { posted <- fn })
 	a.initPlatformState()
 	a.configurePlatformPlayer()
 	a.activatePlatformView()
@@ -86,35 +71,5 @@ func TestArtworkCacheKeepsLegacyCoversByPlatform(t *testing.T) {
 	a.setPlatform("first")
 	if restored, _ := host.Artwork(cover, 96); restored != first {
 		t.Fatal("returning to the first platform did not reuse its cover")
-	}
-}
-
-// A cover response from the previous platform is discarded after a platform switch.
-func TestArtCacheDropsLatePlatformResponse(t *testing.T) {
-	b, err := os.ReadFile("../pluginapi/artwork/testdata/animated.webp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	started := make(chan struct{})
-	release := make(chan struct{})
-	posted := make(chan func(), 1)
-	generation := uint64(1)
-	c := newArtCache(func(fn func()) { posted <- fn })
-	c.generation = func() uint64 { return generation }
-	c.fetch = func() func(string) ([]byte, error) {
-		return func(string) ([]byte, error) {
-			close(started)
-			<-release
-			return b, nil
-		}
-	}
-	c.get("service://cover/old", "service://cover/old", false)
-	<-started
-	generation = 2
-	close(release)
-	postedFn := <-posted
-	postedFn()
-	if _, ok := c.art["service://cover/old"]; ok {
-		t.Fatal("late cover response populated the new platform cache")
 	}
 }

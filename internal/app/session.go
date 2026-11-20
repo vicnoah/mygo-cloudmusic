@@ -11,9 +11,8 @@ import (
 	"waygu-music/internal/player"
 )
 
-// Where playback was left is kept in session.json in the user data
-// directory: on quitting, and every little while as it plays, in case the
-// app does not get to quit.
+// The original session.json remains available to its owner and to older
+// releases. New sessions are saved per platform.
 
 func sessionPath() (string, error) {
 	dir, err := mygo.App.Path(mygo.PathUserData)
@@ -33,8 +32,11 @@ func (a *app) saveSession() {
 	if err != nil || string(b) == a.savedSession {
 		return
 	}
-	path, err := sessionPath()
+	path, err := platformSessionPath(a.platformID)
 	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return
 	}
 	if os.WriteFile(path+".part", b, 0o600) == nil && os.Rename(path+".part", path) == nil {
@@ -79,16 +81,23 @@ func (p playbackContinuity) LoadSession() (player.Session, bool) {
 	}
 	a := p.a
 	a.restored = true
-	path, err := sessionPath()
+	path, err := platformSessionPath(a.platformID)
 	if err != nil {
 		return player.Session{}, false
 	}
 	b, err := os.ReadFile(path)
+	legacy := os.IsNotExist(err)
+	if legacy {
+		if legacyPath, pathErr := sessionPath(); pathErr == nil {
+			b, err = os.ReadFile(legacyPath)
+		}
+	}
 	if err != nil {
 		return player.Session{}, false
 	}
 	var s player.Session
-	if json.Unmarshal(b, &s) != nil || !a.sessionBelongsToActivePlatform(s) {
+	if json.Unmarshal(b, &s) != nil || (legacy && !a.settings.assignLegacySubsonicSource(b, s.Queue)) ||
+		!a.ownsTracksFor(a.platformID, s.Queue) {
 		return player.Session{}, false
 	}
 	a.savedSession = string(b)

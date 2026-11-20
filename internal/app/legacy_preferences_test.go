@@ -7,8 +7,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo"
-
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 // Plugins can opt into an old settings location and update it without changing each other's preferences.

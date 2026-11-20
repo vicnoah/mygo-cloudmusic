@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"waygu-music/internal/player/dlna"
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 // Switching from paused local playback does not resolve the source or set a URI on the renderer.

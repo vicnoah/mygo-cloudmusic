@@ -1,82 +1,91 @@
 package app
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
-	"waygu-music/internal/pluginapi"
+	"github.com/egoist/mygo/ui"
+	"github.com/waygu-music-plugin/sdk/platformrpc"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
+
+	"waygu-music/internal/pluginregistry"
 )
 
-// The host selects the first launchable public registration on startup and includes developer plugins only when enabled.
-func TestStartupAndVisibilityFollowRegistrations(t *testing.T) {
+// Choosing a platform in the manager activates it and saves the selection for the next launch.
+func TestPluginManagerSwitchPersistsSelection(t *testing.T) {
 	a := newTestApp()
-	preview := testRegistration("preview", nil)
-	preview.DeveloperOnly = true
-	a.platformRegistrations = []pluginapi.Registration{
-		preview, testRegistration("first", nil), testRegistration("second", nil),
+	a.settings.path = filepath.Join(t.TempDir(), "settings.json")
+	a.platformRegistrations = []pluginapi.Registration{testRegistration("first", nil), testRegistration("second", nil)}
+	if !a.initPlatformState() {
+		t.Fatal("no platform registered")
 	}
-	if !a.initPlatformState() || a.platformID != "first" {
-		t.Fatalf("first launch selected %q", a.platformID)
+	a.activatePlatformView()
+	t.Cleanup(func() { a.deactivatePlatformView(false) })
+
+	tt := ui.NewTester(a.pluginManagerView, 520, 560)
+	if err := tt.Click("使用 second"); err != nil {
+		t.Fatal(err)
 	}
-	infos := a.platformInfos()
-	if len(infos) != 2 || infos[0].ID != "first" || infos[1].ID != "second" {
-		t.Fatalf("visible platforms = %+v", infos)
+	if a.platformID != "second" {
+		t.Fatalf("the manager did not activate the selected platform: %q", a.platformID)
 	}
-	a.settings.DeveloperMode = true
-	infos = a.platformInfos()
-	if len(infos) != 3 || infos[0].ID != "preview" || infos[1].ID != "first" || infos[2].ID != "second" {
-		t.Fatalf("developer platforms = %+v", infos)
+	data, err := os.ReadFile(a.settings.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved platformSettings
+	if err := json.Unmarshal(data, &saved); err != nil || saved.Platform != "second" {
+		t.Fatalf("the manager did not save the selected platform: %q, %v", saved.Platform, err)
 	}
 }
 
-// Clicking version 5 times activates developer mode, and 5 more times deactivates it.
-func TestDeveloperModeToggle(t *testing.T) {
+// Editing a package source saves only that package and discards edits when cancelled.
+func TestPluginManagerSourceEditorSavesSelectedPackage(t *testing.T) {
 	a := newTestApp()
-	if a.settings.DeveloperMode {
-		t.Fatal("developer mode enabled by default")
+	dir := t.TempDir()
+	a.settings.path = filepath.Join(dir, "settings.json")
+	registry, err := pluginregistry.New(filepath.Join(dir, "registry"), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	for i := 1; i <= 4; i++ {
-		a.onVersionClicked()
-		if a.settings.DeveloperMode {
-			t.Fatalf("developer mode enabled prematurely at click %d", i)
-		}
-		if a.toast != "" {
-			t.Fatalf("unexpected toast on intermediate click %d: %q", i, a.toast)
-		}
-		if i == 3 && ((platformHost{a: a}).DesktopSettings().VersionClicksRemaining != 2) {
-			t.Fatal("incorrect remaining click count on click 3")
-		}
-		if i == 4 && ((platformHost{a: a}).DesktopSettings().VersionClicksRemaining != 1) {
-			t.Fatal("incorrect remaining click count on click 4")
-		}
+	a.localPlugins = make(map[pluginapi.ID]*localPlugin)
+	for _, id := range []string{"first", "second"} {
+		entry := testRegistration(pluginapi.ID(id), nil)
+		a.platformRegistrations = append(a.platformRegistrations, entry)
+		a.localPlugins[entry.ID] = &localPlugin{entry: entry, registry: registry,
+			program: platformrpc.Program{Identity: platformrpc.Identity{Package: id, Entry: id}}}
 	}
-	a.onVersionClicked() // 5th click
-	if !a.settings.DeveloperMode {
-		t.Fatal("developer mode not enabled after 5 clicks")
-	}
-	if a.toast != "已开启开发者模式" {
-		t.Fatalf("unexpected toast: %q", a.toast)
-	}
-
-	// 5 more clicks to disable
-	a.toast = ""
-	for i := 1; i <= 4; i++ {
-		a.onVersionClicked()
-		if !a.settings.DeveloperMode {
-			t.Fatalf("developer mode disabled prematurely at click %d", i)
-		}
-		if a.toast != "" {
-			t.Fatalf("unexpected toast on disable click %d: %q", i, a.toast)
-		}
-		if i == 3 && ((platformHost{a: a}).DesktopSettings().VersionClicksRemaining != 2) {
-			t.Fatal("incorrect remaining click count on disable click 3")
+	view := ui.NewTester(a.pluginManagerView, 810, 650)
+	click := func(label string) {
+		t.Helper()
+		if err := view.Click(label); err != nil {
+			t.Fatal(err)
 		}
 	}
-	a.onVersionClicked() // 5th click
-	if a.settings.DeveloperMode {
-		t.Fatal("developer mode not disabled after 5 clicks")
+	click("管理 second")
+	click("来源设置…")
+	view.Type("https://cancel.example/catalog.json")
+	click("取消")
+	if len(a.settings.PluginCatalogs) != 0 || a.localPlugins["second"].catalog != "" {
+		t.Fatal("cancelling saved an unfinished source")
 	}
-	if a.toast != "已关闭开发者模式" {
-		t.Fatalf("unexpected toast: %q", a.toast)
+	click("来源设置…")
+	if !view.Focused("插件目录 URL") {
+		t.Fatal("the new source editor did not focus its URL field")
+	}
+	view.Type("https://repo.example/catalog.json")
+	click("保存来源")
+	data, err := os.ReadFile(a.settings.path)
+	if err != nil {
+		t.Fatalf("source was not saved: %v (%s)", err, a.pluginSource.message)
+	}
+	var saved settings
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.PluginCatalogs) != 1 || saved.PluginCatalogs["second"] != (pluginCatalogSettings{URL: "https://repo.example/catalog.json"}) || a.pluginSource.open {
+		t.Fatalf("source edit did not save the selected package and close the dialog: %+v", saved.PluginCatalogs)
 	}
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 // maxSkipped is how many songs that cannot play in a row stop the player,
@@ -22,7 +22,7 @@ const maxSkipped = 3
 // PlayList plays the loaded part of a provider list and asks more for the
 // remainder as playback approaches its end. It is the shared queue seam for
 // platform pagers; the player never knows how a page is fetched.
-func (p *Player) PlayList(tracks []pluginapi.Track, start int, more func(func([]pluginapi.Track))) {
+func (p *Player) PlayList(tracks []pluginapi.Track, start int, more pluginapi.QueueFeed) {
 	if len(tracks) == 0 {
 		return
 	}
@@ -50,8 +50,9 @@ func (p *Player) Reset() {
 	if p == nil {
 		return
 	}
-	p.stop()
+	p.stop(true)
 	p.gen++
+	p.queueRevision++
 	p.endRadio()
 	p.queue = nil
 	p.order = nil
@@ -75,9 +76,10 @@ func (p *Player) Reset() {
 
 // PlatformPlayer holds the host callbacks used to look up media by track.
 type PlatformPlayer struct {
-	started     bool // the current track has been reported as started
-	loadContext context.Context
-	cancelLoad  context.CancelFunc
+	started       bool // the current track has been reported as started
+	loadContext   context.Context
+	cancelLoad    context.CancelFunc
+	queueRevision uint64
 
 	ResolveStream     func(context.Context, *pluginapi.Track, string) (*pluginapi.Stream, error)
 	ArtworkURL        func(*pluginapi.Track) string
@@ -88,6 +90,11 @@ type PlatformPlayer struct {
 	TrackPreferences  func(*pluginapi.Track) pluginapi.AudioPreferences
 	StreamError       func(*pluginapi.Track, error) string
 	Started           func(*pluginapi.Track)
+}
+
+// Revisions identifies the queue and the playback attempt on the app thread.
+func (p *Player) Revisions() (queue, attempt uint64) {
+	return p.queueRevision, uint64(p.gen)
 }
 
 func (p *Player) trackContext() context.Context {
@@ -147,7 +154,7 @@ func (p *Player) resolveAudio(ctx context.Context, t *pluginapi.Track, advanced 
 	if source == nil {
 		return nil, nil, nil, false
 	}
-	decoded, err := openSegmentedStream(source)
+	decoded, err := openSegmentedStream(ctx, source)
 	if err != nil {
 		source.Close()
 	}

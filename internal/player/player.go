@@ -6,17 +6,17 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
-	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/audio"
 
+	"github.com/waygu-music-plugin/sdk/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi/lyrics"
 	"waygu-music/internal/player/dlna"
 	"waygu-music/internal/player/mpv"
-	"waygu-music/internal/pluginapi"
-	"waygu-music/internal/pluginapi/lyrics"
 )
 
 type mpvVolumeOutput struct {
@@ -71,11 +71,12 @@ type Player struct {
 
 	// A radio goes on with the tracks its feed gives, as the queue nears
 	// its end, for as long as nothing else is played.
-	radio    string
-	feed     func(got func([]pluginapi.Track))
-	radioGen int  // counts radios, to drop what an old one gives
-	feeding  bool // the feed is asked
-	awaiting bool // at the queue's end, for what the feed gives
+	radio      string
+	feed       pluginapi.QueueFeed
+	feedPage   uint64
+	feedCancel context.CancelFunc
+	feedRetry  bool // the feed failed while playback was waiting at the end
+	awaiting   bool // at the queue's end, for what the feed gives
 
 	track   *pluginapi.Track
 	out     *audio.Player
@@ -91,11 +92,12 @@ type Player struct {
 	lyrics       []lyrics.Line
 	lyricsLoaded bool
 
-	useMPV   bool
-	mpvCfg   mpv.Config
-	mpvOut   *mpv.Engine
-	dlnaCtrl *dlna.Controller
-	cast     *castPlayback
+	useMPV      bool
+	mpvCfg      mpv.Config
+	mpvOut      *mpv.Engine
+	dlnaCtrl    *dlna.Controller
+	cast        *castPlayback
+	castWorkers sync.WaitGroup
 
 	// rgDB is the replaygain preamp last set on mpvOut, and rgSet whether
 	// one was: changing the volume need not set it again.
@@ -140,9 +142,7 @@ func New(post func(func())) *Player {
 
 // sync shows the system, and Changed, where playback is.
 func (p *Player) sync() {
-	if p.Changed != nil {
-		defer p.Changed()
-	}
+	defer p.notifyChanged()
 	if p.track == nil {
 		mygo.NowPlaying.Clear()
 		return
@@ -152,6 +152,12 @@ func (p *Player) sync() {
 		state = mygo.PlaybackPlaying
 	}
 	mygo.NowPlaying.SetPlayback(state, p.Position())
+}
+
+func (p *Player) notifyChanged() {
+	if p.Changed != nil {
+		p.Changed()
+	}
 }
 
 // announce shows the system the track, and its cover once loaded.
@@ -202,6 +208,7 @@ func (p *Player) PlayQueue(tracks []pluginapi.Track, start int) {
 	p.endRadio()
 	start = min(max(start, 0), len(tracks)-1)
 	p.queue = append([]pluginapi.Track(nil), tracks...)
+	p.queueRevision++
 	p.order = make([]int, len(p.queue))
 	for i := range p.order {
 		p.order[i] = i
@@ -217,7 +224,7 @@ func (p *Player) PlayQueue(tracks []pluginapi.Track, start int) {
 // PlayRadio plays tracks in their order, then goes on with those feed
 // gives as the queue nears its end, until something else is played. The
 // radio's name says which it is. feed calls got on the main thread.
-func (p *Player) PlayRadio(name string, tracks []pluginapi.Track, feed func(got func([]pluginapi.Track))) {
+func (p *Player) PlayRadio(name string, tracks []pluginapi.Track, feed pluginapi.QueueFeed) {
 	if len(tracks) == 0 {
 		return
 	}
@@ -231,20 +238,22 @@ func (p *Player) PlayRadio(name string, tracks []pluginapi.Track, feed func(got 
 // RadioFrom makes the track playing the first of a radio's queue, which
 // goes on with tracks, then with those feed gives: without starting it
 // over.
-func (p *Player) RadioFrom(name string, tracks []pluginapi.Track, feed func(got func([]pluginapi.Track))) {
+func (p *Player) RadioFrom(name string, tracks []pluginapi.Track, feed pluginapi.QueueFeed) {
 	if p.track == nil {
 		return
 	}
 	p.queue, p.order, p.at = []pluginapi.Track{*p.track}, []int{0}, 0
+	p.queueRevision++
 	p.appendTracks(tracks)
 	p.AttachRadio(name, feed)
 }
 
 // AttachRadio makes the queue the radio name's, which feed goes on with,
 // as after restoring a session that played it.
-func (p *Player) AttachRadio(name string, feed func(got func([]pluginapi.Track))) {
+func (p *Player) AttachRadio(name string, feed pluginapi.QueueFeed) {
 	p.endRadio()
 	p.radio, p.feed = name, feed
+	p.notifyChanged()
 	p.refill()
 }
 
@@ -262,6 +271,7 @@ func (p *Player) EndRadio() {
 			kept[i] = p.queue[k]
 		}
 		p.queue, p.order = kept, make([]int, len(kept))
+		p.queueRevision++
 		for i := range p.order {
 			p.order[i] = i
 		}
@@ -270,12 +280,17 @@ func (p *Player) EndRadio() {
 		// At its end, waiting for more: nothing plays on.
 		p.playing = false
 		p.sync()
+		return
 	}
+	p.notifyChanged()
 }
 
 func (p *Player) endRadio() {
-	p.radioGen++
-	p.radio, p.feed, p.feeding, p.awaiting = "", nil, false, false
+	if p.feedCancel != nil {
+		p.feedCancel()
+		p.feedCancel = nil
+	}
+	p.radio, p.feed, p.feedPage, p.feedRetry, p.awaiting = "", nil, 0, false, false
 }
 
 // Radio returns the name of the radio playing, or "".
@@ -283,21 +298,37 @@ func (p *Player) Radio() string { return p.radio }
 
 // refill asks the radio for more once the queue is near its end.
 func (p *Player) refill() {
-	if p.feed == nil || p.feeding || p.at < len(p.order)-2 {
+	if p.feed == nil || p.feedCancel != nil || p.at < len(p.order)-2 {
 		return
 	}
-	p.feeding = true
-	gen := p.radioGen
-	p.feed(func(more []pluginapi.Track) {
-		if gen != p.radioGen {
+	ctx, cancel := context.WithCancel(context.Background())
+	p.feedCancel = cancel
+	cursor := pluginapi.QueueFeedCursor{Page: p.feedPage}
+	if len(p.order) > 0 {
+		cursor.FirstID = p.queue[p.order[0]].ID
+		cursor.LastID = p.queue[p.order[len(p.order)-1]].ID
+	}
+	p.feed(ctx, cursor, func(more []pluginapi.Track, err error) {
+		if ctx.Err() != nil {
 			return
 		}
-		p.feeding = false
+		cancel()
+		p.feedCancel = nil
+		if err != nil {
+			if p.awaiting {
+				p.awaiting, p.playing, p.feedRetry = false, false, true
+				p.err = "暂时无法加载更多歌曲"
+				p.sync()
+			}
+			return
+		}
+		p.feedPage++
 		if !p.acceptRefill(more) {
 			return
 		}
 		switch {
 		case !p.awaiting:
+			p.notifyChanged()
 		case p.at+1 < len(p.order):
 			p.awaiting = false
 			p.load(p.at + 1)
@@ -312,12 +343,18 @@ func (p *Player) refill() {
 
 // awaitFeed waits at the end of a radio's queue for what its feed gives.
 func (p *Player) awaitFeed() {
+	if p.feedRetry {
+		p.feedRetry = false
+		p.err = ""
+	}
 	p.awaiting = true
+	p.notifyChanged()
 	p.refill()
 }
 
 // appendTracks adds tracks to the end of the queue, but those in it.
 func (p *Player) appendTracks(tracks []pluginapi.Track) {
+	before := len(p.queue)
 	in := make(map[trackIdentity]bool, len(p.queue))
 	for _, t := range p.queue {
 		in[identifyTrack(p.trackOwner(&t), &t)] = true
@@ -329,6 +366,9 @@ func (p *Player) appendTracks(tracks []pluginapi.Track) {
 			p.order = append(p.order, len(p.queue))
 			p.queue = append(p.queue, t)
 		}
+	}
+	if len(p.queue) != before {
+		p.queueRevision++
 	}
 }
 
@@ -344,9 +384,11 @@ func (p *Player) shuffleOrder(first int) {
 
 func (p *Player) ToggleShuffle() {
 	p.shuffle = !p.shuffle
+	defer p.notifyChanged()
 	if len(p.order) == 0 {
 		return
 	}
+	p.queueRevision++
 	cur := p.order[max(p.at, 0)]
 	if p.shuffle {
 		p.shuffleOrder(cur)
@@ -359,7 +401,10 @@ func (p *Player) ToggleShuffle() {
 	}
 }
 
-func (p *Player) CycleRepeat() { p.repeat = (p.repeat + 1) % 3 }
+func (p *Player) CycleRepeat() {
+	p.repeat = (p.repeat + 1) % 3
+	p.notifyChanged()
+}
 
 // Current returns the track playing or loading, or nil.
 func (p *Player) Current() *pluginapi.Track { return p.track }
@@ -427,11 +472,26 @@ type Audio = pluginapi.Audio
 // download, waiting for what has not come in, and fails once the track
 // changes. It works on any goroutine once opened; close it when done.
 func (p *Player) OpenAudio() (Audio, error) {
+	return p.OpenAudioFor(context.Background())
+}
+
+// OpenAudioFor also revokes the reader when its owning plugin is deactivated.
+func (p *Player) OpenAudioFor(activation context.Context) (Audio, error) {
+	if err := activation.Err(); err != nil {
+		return nil, err
+	}
 	if p.stream == nil || p.track == nil {
 		return nil, errors.New("player: nothing loaded")
 	}
+	if _, segmented := p.stream.(*hlsStream); segmented {
+		return nil, errors.New("player: independent decoding is unavailable for segmented audio")
+	}
 	dl, _ := p.stream.source()
-	return openShared(dl, p.track.Duration)
+	audio, err := openShared(p.trackContext(), activation, dl, p.track.Duration)
+	if err != nil {
+		return nil, err
+	}
+	return audio, nil
 }
 
 // PlayOrder returns the queue's indices in play order, and where the
@@ -445,7 +505,8 @@ func (p *Player) Next() {
 	at := p.at + 1
 	if at >= len(p.order) {
 		if p.feed != nil {
-			p.stop()
+			p.stop(true)
+			p.loading = false
 			p.awaitFeed()
 			return
 		}
@@ -490,40 +551,51 @@ func (p *Player) IsCasting() bool {
 
 // SwitchOutput changes the playback output between local speaker and a DLNA device.
 // Passing "" selects the local speaker; passing a non-empty device ID selects that DLNA device.
-func (p *Player) SwitchOutput(devID string) {
+func (p *Player) SwitchOutput(devID string) error {
 	if p.dlnaCtrl == nil {
-		return
+		return pluginapi.ErrUnavailable
 	}
 	active := p.dlnaCtrl.ActiveDevice()
 	if (active == nil && devID == "") || (active != nil && active.ID == devID) {
-		return
+		return nil
 	}
 	pos := p.Position()
 	playing, at := p.castWantsPlay(), p.at
 	if err := p.dlnaCtrl.SelectDevice(devID); err != nil {
 		p.err = err.Error()
 		p.sync()
-		return
+		return err
 	}
 
 	if p.track == nil || p.at < 0 {
 		p.sync()
-		return
+		return nil
 	}
 
 	// Reload current track on new output target starting from current position
 	p.loadSkipping(at, 0, playing, pos)
+	return nil
 }
 
 // SetUseMPV toggles whether to prefer the MPV high-quality audio engine.
 func (p *Player) SetUseMPV(use bool) {
-	if p.useMPV != use {
-		p.useMPV = use
-		if !use && p.mpvOut != nil {
-			p.mpvOut.Close()
-			p.mpvOut = nil
-			p.rgSet = false
-		}
+	if p.useMPV == use {
+		return
+	}
+	ready := mpv.Ready()
+	reload := ready && p.track != nil && p.at >= 0 && !p.IsCasting() && !p.awaiting && (p.loading || p.Ready())
+	var pos time.Duration
+	if reload {
+		pos = p.Position()
+	}
+	p.useMPV = use
+	if !use && p.mpvOut != nil {
+		p.mpvOut.Close()
+		p.mpvOut = nil
+		p.rgSet = false
+	}
+	if reload {
+		p.loadTrack(p.at, 0, p.playing, pos, p.started)
 	}
 }
 
@@ -569,6 +641,10 @@ func (p *Player) MPVReady() bool {
 
 // TogglePlay pauses, fading out, or plays, fading in.
 func (p *Player) TogglePlay() {
+	if p.feedRetry {
+		p.awaitFeed()
+		return
+	}
 	if p.IsCasting() {
 		p.toggleCast()
 		return
@@ -659,6 +735,7 @@ func (p *Player) Seek(t time.Duration) {
 	}
 	if p.out == nil {
 		p.pending = t
+		p.notifyChanged()
 		return
 	}
 	out := p.out
@@ -786,7 +863,47 @@ func (p *Player) Levels() ([Bands]float32, bool) {
 	return spec.at(frame)
 }
 
-func (p *Player) stop() {
+const playbackReleaseTimeout = 2 * time.Second
+
+// Close stops playback after the application has saved the current session.
+func (p *Player) Close() {
+	p.gen++
+	p.endRadio()
+	segmented, _ := p.stream.(*hlsStream)
+	p.stop(false)
+	if p.mpvOut != nil {
+		p.mpvOut.Close()
+		p.mpvOut = nil
+	}
+	if p.dlnaCtrl != nil {
+		_ = p.dlnaCtrl.Close()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), playbackReleaseTimeout)
+	defer cancel()
+	released := make(chan struct{})
+	go func() {
+		defer close(released)
+		p.castWorkers.Wait()
+		if segmented != nil {
+			waitForSegmentRelease(ctx, segmented.h)
+		}
+	}()
+	select {
+	case <-released:
+	case <-ctx.Done():
+	}
+}
+
+func waitForSegmentRelease(ctx context.Context, segments pluginapi.SegmentedSource) {
+	if source, ok := segments.(interface{ Released() <-chan struct{} }); ok {
+		select {
+		case <-source.Released():
+		case <-ctx.Done():
+		}
+	}
+}
+
+func (p *Player) stop(fade bool) {
 	if p.cast != nil {
 		p.dlnaCtrl.Stop()
 		if p.cast.release != nil {
@@ -800,10 +917,13 @@ func (p *Player) stop() {
 	}
 	p.loadContext = nil
 	if out := p.out; out != nil {
-		// Paused first, it fades out over a few milliseconds, rather than
-		// stopping with a click.
-		out.Pause()
-		time.AfterFunc(100*time.Millisecond, out.Close)
+		if fade {
+			// Let the paused output fade out to avoid a click between tracks.
+			out.Pause()
+			time.AfterFunc(100*time.Millisecond, out.Close)
+		} else {
+			out.Close()
+		}
 	}
 	if mpvOut := p.mpvOut; mpvOut != nil {
 		mpvOut.Stop()
@@ -821,7 +941,12 @@ func (p *Player) load(at int) {
 // loadSkipping loads the track at order[at], to play or not, from from,
 // skipping those that cannot play: skipped of them so far.
 func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
-	p.stop()
+	p.loadTrack(at, skipped, play, from, false)
+}
+
+// loadTrack can keep the start report when reloading the current track.
+func (p *Player) loadTrack(at, skipped int, play bool, from time.Duration, started bool) {
+	p.stop(true)
 	p.gen++
 	gen := p.gen
 	ctx, cancel := context.WithCancel(context.Background())
@@ -829,11 +954,12 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 	p.at = at
 	t := p.queue[p.order[at]]
 	p.track = &t
-	p.loading, p.playing, p.started, p.err = true, play, false, ""
-	p.awaiting = false
+	p.loading, p.playing, p.started, p.err = true, play, started, ""
+	p.awaiting, p.feedRetry = false, false
 	p.lyrics, p.lyricsLoaded = nil, false
 	p.pending = from
 	p.announce(&t, nil)
+	p.notifyChanged()
 	p.refill()
 
 	if p.IsCasting() {
@@ -868,6 +994,7 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 			if gen == p.gen && ctx.Err() == nil {
 				p.lyrics = lines
 				p.lyricsLoaded = true
+				p.notifyChanged()
 			}
 		})
 	}()
@@ -948,6 +1075,13 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 				playURL := p.mpvURL(ctx, &t, media)
 
 				if playURL != "" {
+					engine.OnPlaybackRestart(func() {
+						p.post(func() {
+							if gen == p.gen && ctx.Err() == nil && p.mpvOut == engine {
+								p.sync()
+							}
+						})
+					})
 					if err := engine.Play(playURL, nil, p.pending); err == nil {
 						p.fade.attach(mpvVolumeOutput{p: p, e: p.mpvOut}, fadeLevel)
 						p.applyGain()
@@ -1025,10 +1159,6 @@ func (p *Player) mpvURL(ctx context.Context, t *pluginapi.Track, media playbackS
 		return playURL
 	}
 	proxy := p.dlnaCtrl.Proxy()
-	var headers http.Header
-	if media.info.Header != nil {
-		headers = media.info.Header()
-	}
 	ext := media.info.Type
 	if ext == "" {
 		ext = t.Format
@@ -1039,7 +1169,8 @@ func (p *Player) mpvURL(ctx context.Context, t *pluginapi.Track, media playbackS
 	}
 	proxy.Register(trackID, dlna.StreamSource{
 		RemoteURL:   playURL,
-		Headers:     headers,
+		Header:      media.info.Header,
+		Renew:       media.info.Renew,
 		ContentType: dlna.FormatToMIME(media.info.Type),
 	})
 	context.AfterFunc(ctx, func() { proxy.Unregister(trackID) })
@@ -1174,7 +1305,7 @@ func (p *Player) openOrdinary(ctx context.Context, t pluginapi.Track, level stri
 		return playbackSource{info: info, localFile: path}, nil
 	}
 	if !ok {
-		dl = p.Cache.download(ref, info)
+		dl = p.Cache.download(ctx, ref, info)
 	}
 	s, err := openStream(dl, t.Duration)
 	if err != nil {
@@ -1206,18 +1337,11 @@ func (p *Player) Session() (Session, bool) {
 // Restore picks up a session where it was left, paused, and loads its
 // track to play at once when asked.
 func (p *Player) Restore(s Session) {
-	n := len(s.Queue)
-	if n == 0 || len(s.Order) != n || s.At < 0 || s.At >= n {
+	if !s.ValidQueue() {
 		return
 	}
-	seen := make([]bool, n)
-	for _, i := range s.Order {
-		if i < 0 || i >= n || seen[i] {
-			return
-		}
-		seen[i] = true
-	}
 	p.queue, p.order = s.Queue, s.Order
+	p.queueRevision++
 	p.shuffle, p.repeat = s.Shuffle, s.Repeat%3
 	p.loadSkipping(s.At, 0, false, time.Duration(s.Position)*time.Millisecond)
 }

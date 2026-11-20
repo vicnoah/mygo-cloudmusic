@@ -1,0 +1,15 @@
+# 平台插件
+
+飞牛音乐随宿主提供。Songloft、Subsonic 兼容服务、网易云音乐和 QQ 音乐从[官方插件目录](https://github.com/waygu-music-plugin/registry)安装。打开托盘或应用菜单的「插件管理」，选择插件包并点「安装或更新」。更换自建目录时，在「来源设置」填写 HTTPS 插件目录地址。
+
+外置平台在独立进程中绘制主窗口、播放器和设置等界面。宿主管理插件安装与切换，并提供解码、输出、缓存和其他桌面服务。SDK 的[接入和协议说明](https://github.com/waygu-music-plugin/sdk)定义了对应接口。
+
+| 项目 | 仓库 |
+| --- | --- |
+| SDK | [waygu-music-plugin/sdk](https://github.com/waygu-music-plugin/sdk) |
+| 飞牛音乐 | [waygu-music-plugin/fnmusic](https://github.com/waygu-music-plugin/fnmusic) |
+| Songloft | [waygu-music-plugin/songloft](https://github.com/waygu-music-plugin/songloft) |
+| Subsonic、Navidrome、Jellyfin、Gonic | [waygu-music-plugin/subsonic](https://github.com/waygu-music-plugin/subsonic) |
+| 网易云音乐 | [waygu-music-plugin/netease](https://github.com/waygu-music-plugin/netease) |
+| QQ 音乐 | [waygu-music-plugin/qqmusic](https://github.com/waygu-music-plugin/qqmusic) |
+| 官方目录及构建工具 | [waygu-music-plugin/registry](https://github.com/waygu-music-plugin/registry) |

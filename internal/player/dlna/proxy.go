@@ -22,6 +22,8 @@ import (
 	"time"
 
 	_ "golang.org/x/image/webp"
+
+	"github.com/waygu-music-plugin/sdk/pluginapi/network"
 )
 
 // StreamSource provides audio data or a remote URL for a track being cast to DLNA.
@@ -31,6 +33,8 @@ type StreamSource struct {
 	// Headers are extra HTTP headers required by the remote server (e.g. Auth).
 	Headers   http.Header
 	Header    func() http.Header
+	Renew     network.MediaRenew
+	source    *network.MediaSource
 	Telemetry *streamTelemetry
 	// LocalFile is the path to a fully cached local file, or "".
 	LocalFile string
@@ -74,6 +78,13 @@ func (s StreamSource) requestHeaders() http.Header {
 		return s.Header()
 	}
 	return s.Headers
+}
+
+func (s StreamSource) upstream() *network.MediaSource {
+	if s.source != nil {
+		return s.source
+	}
+	return network.NewMediaSource(s.RemoteURL, s.requestHeaders, s.Renew, defaultUserAgent)
 }
 
 // Proxy is a lightweight local HTTP streaming proxy for DLNA media renderers.
@@ -249,6 +260,9 @@ func (p *Proxy) LANCoverURLFor(trackID, targetURL string) string {
 
 // Register registers or updates a stream source for a track, returning its DLNA LAN URL.
 func (p *Proxy) Register(trackID string, src StreamSource) string {
+	if src.RemoteURL != "" {
+		src.source = src.upstream()
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.sources[trackID] = src
@@ -390,93 +404,50 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 		client = http.DefaultClient
 	}
 
-	// Handle HEAD requests specifically to learn content length while preventing 403 / 405 rejections from CDNs
+	source := src.upstream()
 	if r.Method == http.MethodHead {
-		headReq, err := http.NewRequestWithContext(ctx, http.MethodHead, src.RemoteURL, nil)
+		// Some media servers reject HEAD even when their GET supports ranges.
+		response, err := source.Open(ctx, client, http.MethodHead, nil)
+		if err == nil {
+			_ = response.Body.Close()
+			if response.StatusCode >= 200 && response.StatusCode < 300 {
+				copyAudioHeaders(w.Header(), response.Header)
+				if src.ContentType != "" {
+					w.Header().Set("Content-Type", src.ContentType)
+				}
+				w.WriteHeader(response.StatusCode)
+				return
+			}
+		}
+		probe, err := source.Open(ctx, client, http.MethodGet, http.Header{"Range": {"bytes=0-0"}})
 		if err != nil {
 			http.Error(w, "audio source unavailable", http.StatusBadGateway)
 			return
 		}
-		for k, vv := range src.requestHeaders() {
-			for _, v := range vv {
-				headReq.Header.Add(k, v)
-			}
-		}
-		if headReq.Header.Get("User-Agent") == "" {
-			headReq.Header.Set("User-Agent", defaultUserAgent)
-		}
-		headResp, err := client.Do(headReq)
-		if err == nil && headResp.StatusCode >= 200 && headResp.StatusCode < 300 {
-			defer headResp.Body.Close()
-			for k, vv := range headResp.Header {
-				for _, v := range vv {
-					if !strings.EqualFold(k, "Content-Type") && !strings.EqualFold(k, "Connection") {
-						w.Header().Add(k, v)
-					}
-				}
-			}
-			if src.ContentType != "" {
-				w.Header().Set("Content-Type", src.ContentType)
-			}
-			w.WriteHeader(headResp.StatusCode)
+		_ = probe.Body.Close()
+		if probe.StatusCode != http.StatusOK && probe.StatusCode != http.StatusPartialContent {
+			http.Error(w, "audio source unavailable", probe.StatusCode)
 			return
 		}
-		if headResp != nil {
-			_ = headResp.Body.Close()
-		}
-
-		// Fallback probe for CDNs rejecting HEAD: send Range: 0-0 GET to learn content length
-		probeReq := headReq.Clone(ctx)
-		probeReq.Method = http.MethodGet
-		probeReq.Header = make(http.Header)
-		for k, vv := range src.requestHeaders() {
-			for _, v := range vv {
-				probeReq.Header.Add(k, v)
+		if cr := probe.Header.Get("Content-Range"); cr != "" {
+			if _, total, ok := strings.Cut(cr, "/"); ok && total != "*" {
+				w.Header().Set("Content-Length", total)
 			}
+		} else if cl := probe.Header.Get("Content-Length"); cl != "" {
+			w.Header().Set("Content-Length", cl)
 		}
-		if probeReq.Header.Get("User-Agent") == "" {
-			probeReq.Header.Set("User-Agent", defaultUserAgent)
+		if src.ContentType != "" {
+			w.Header().Set("Content-Type", src.ContentType)
 		}
-		probeReq.Header.Set("Range", "bytes=0-0")
-		probeResp, err := client.Do(probeReq)
-		if probeResp != nil {
-			defer probeResp.Body.Close()
-		}
-		if err == nil && (probeResp.StatusCode == http.StatusOK || probeResp.StatusCode == http.StatusPartialContent) {
-			if cr := probeResp.Header.Get("Content-Range"); cr != "" {
-				if _, total, ok := strings.Cut(cr, "/"); ok && total != "*" {
-					w.Header().Set("Content-Length", total)
-				}
-			} else if cl := probeResp.Header.Get("Content-Length"); cl != "" {
-				w.Header().Set("Content-Length", cl)
-			}
-			if src.ContentType != "" {
-				w.Header().Set("Content-Type", src.ContentType)
-			}
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, r.Method, src.RemoteURL, nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	for k, vv := range src.requestHeaders() {
-		for _, v := range vv {
-			req.Header.Add(k, v)
-		}
+	options := make(http.Header)
+	if byteRange := r.Header.Get("Range"); byteRange != "" {
+		options.Set("Range", byteRange)
 	}
-	if req.Header.Get("User-Agent") == "" {
-		req.Header.Set("User-Agent", defaultUserAgent)
-	}
-	if rng := r.Header.Get("Range"); rng != "" {
-		req.Header.Set("Range", rng)
-	}
-
-	resp, err := client.Do(req)
+	resp, err := source.Open(ctx, client, r.Method, options)
 	if err != nil {
 		if src.Telemetry != nil {
 			src.Telemetry.failure.Store(http.StatusBadGateway)
@@ -486,32 +457,39 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			if strings.EqualFold(k, "Content-Type") && src.ContentType != "" {
-				continue
-			}
-			if strings.EqualFold(k, "Connection") {
-				continue
-			}
-			w.Header().Add(k, v)
+	if resp.StatusCode >= 400 {
+		if src.Telemetry != nil {
+			src.Telemetry.failure.Store(int32(resp.StatusCode))
 		}
+		if contentRange := resp.Header.Get("Content-Range"); resp.StatusCode == http.StatusRequestedRangeNotSatisfiable && contentRange != "" {
+			w.Header().Set("Content-Range", contentRange)
+		}
+		http.Error(w, "audio source unavailable", resp.StatusCode)
+		return
 	}
+	copyAudioHeaders(w.Header(), resp.Header)
 	if src.ContentType != "" {
 		w.Header().Set("Content-Type", src.ContentType)
 	}
 	w.WriteHeader(resp.StatusCode)
 
 	if src.Telemetry != nil {
-		if resp.StatusCode >= 400 {
-			src.Telemetry.failure.Store(int32(resp.StatusCode))
-		} else if r.Method == http.MethodGet {
+		if r.Method == http.MethodGet {
 			src.Telemetry.failure.Store(0)
 			w = &trackedAudioWriter{ResponseWriter: w, telemetry: src.Telemetry, code: resp.StatusCode}
 		}
 	}
-	if r.Method != http.MethodHead {
-		_, _ = io.Copy(w, resp.Body)
+	_, _ = io.Copy(w, resp.Body)
+}
+
+func copyAudioHeaders(dst, src http.Header) {
+	for _, key := range []string{
+		"Accept-Ranges", "Cache-Control", "Content-Encoding", "Content-Length",
+		"Content-Range", "Content-Type", "Etag", "Last-Modified",
+	} {
+		if values := src.Values(key); len(values) != 0 {
+			dst[key] = values
+		}
 	}
 }
 

@@ -8,8 +8,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 // New plugins run through the normal startup and switch flow without sharing a press or saved settings.
@@ -22,14 +21,14 @@ func TestPluginMainWindowRoot(t *testing.T) {
 	a.settings.path = filepath.Join(dir, "settings.json")
 	a.settings.Platform = "uninstalled"
 	clicks := map[pluginapi.ID]int{}
-	registrations := []pluginapi.ID{"preview", "first", "second"}
+	registrations := []pluginapi.ID{"first", "second"}
 	a.platformRegistrations = []pluginapi.Registration{{
 		Info: pluginapi.Info{ID: "incomplete"}, Start: func(pluginapi.Startup) pluginapi.Adapter { return testPluginAdapter{} },
 	}}
 	var firstScope context.Context
 	for _, id := range registrations {
 		a.platformRegistrations = append(a.platformRegistrations, pluginapi.Registration{
-			Info: pluginapi.Info{ID: id, Name: string(id)}, DeveloperOnly: id == "preview",
+			Info: pluginapi.Info{ID: id, Name: string(id)},
 			Start: func(start pluginapi.Startup) pluginapi.Adapter {
 				start.RegisterLifecycle(pluginapi.Lifecycle{Activate: func(ctx context.Context, _ pluginapi.PlaybackContinuity) {
 					if id == "first" {
@@ -52,7 +51,7 @@ func TestPluginMainWindowRoot(t *testing.T) {
 		})
 	}
 	if !a.initPlatformState() || a.platformID != "first" {
-		t.Fatalf("startup platform = %q, want first launchable public plugin", a.platformID)
+		t.Fatalf("startup platform = %q, want first launchable plugin", a.platformID)
 	}
 	a.activatePlatformView()
 	t.Cleanup(func() { a.deactivatePlatformView(false) })

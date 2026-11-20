@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 // Cache keeps the songs played on disk, so that they play again at once,
@@ -191,12 +192,12 @@ func (c *Cache) promoteLegacy(ctx context.Context, track cacheTrack, id int64, i
 
 // download fetches the song of the stream st into a file, to keep once it
 // has all come in; or into memory, if the cache would not keep it.
-func (c *Cache) download(track cacheTrack, st *pluginapi.Stream) *download {
+func (c *Cache) download(ctx context.Context, track cacheTrack, st *pluginapi.Stream) *download {
 	part := c.part(st)
 	if part == nil {
-		return startDownloadWith(st.URL, st.Header, st.Size, nil, nil)
+		return startDownloadWith(ctx, st, nil, nil)
 	}
-	return startDownloadWith(st.URL, st.Header, st.Size, part, func(path string, n int64) (string, bool) {
+	return startDownloadWith(ctx, st, part, func(path string, n int64) (string, bool) {
 		return c.keep(track, st, path, n)
 	})
 }
@@ -289,20 +290,31 @@ func (c *Cache) keepLocked(track cacheTrack, st *pluginapi.Stream, part string, 
 
 // Size returns how many bytes the songs kept take.
 func (c *Cache) Size() int64 {
-	var n int64
-	for _, f := range c.songs() {
-		n += f.size
-	}
+	n, _ := c.Measure()
 	return n
 }
 
+// Measure is Size with an error for an unreadable cache.
+func (c *Cache) Measure() (int64, error) {
+	songs, err := c.listSongs()
+	var n int64
+	for _, f := range songs {
+		n += f.size
+	}
+	return n, err
+}
+
 // Clear drops every song kept.
-func (c *Cache) Clear() {
+func (c *Cache) Clear() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, f := range c.songs() {
-		c.remove(f.path)
+	songs, firstErr := c.listSongs()
+	for _, f := range songs {
+		if err := c.remove(f.path); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
+	return firstErr
 }
 
 type cachedSong struct {
@@ -312,7 +324,16 @@ type cachedSong struct {
 }
 
 func (c *Cache) songs() []cachedSong {
-	entries, _ := os.ReadDir(c.dir)
+	songs, _ := c.listSongs()
+	return songs
+}
+
+func (c *Cache) listSongs() ([]cachedSong, error) {
+	entries, err := os.ReadDir(c.dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	firstErr := err
 	var out []cachedSong
 	for _, e := range entries {
 		ext := filepath.Ext(e.Name())
@@ -321,16 +342,22 @@ func (c *Cache) songs() []cachedSong {
 		}
 		info, err := e.Info()
 		if err != nil {
+			if firstErr == nil && !os.IsNotExist(err) {
+				firstErr = err
+			}
+			continue
+		}
+		if !info.Mode().IsRegular() {
 			continue
 		}
 		out = append(out, cachedSong{filepath.Join(c.dir, e.Name()), info.Size(), info.ModTime()})
 	}
-	return out
+	return out, firstErr
 }
 
-func (c *Cache) remove(path string) bool {
+func (c *Cache) remove(path string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return false
+		return err
 	}
 	ext := filepath.Ext(path)
 	meta := strings.TrimSuffix(path, ext) + ".json"
@@ -341,7 +368,7 @@ func (c *Cache) remove(path string) bool {
 			_ = os.Remove(meta)
 		}
 	}
-	return true
+	return nil
 }
 
 // pruneLocked drops the songs played longest ago until the rest fit the
@@ -358,7 +385,7 @@ func (c *Cache) pruneLocked(keep string) {
 		if total <= c.limit {
 			return
 		}
-		if f.path != keep && c.remove(f.path) {
+		if f.path != keep && c.remove(f.path) == nil {
 			total -= f.size
 		}
 	}

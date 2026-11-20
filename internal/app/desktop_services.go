@@ -1,22 +1,14 @@
 package app
 
 import (
-	"time"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
+	"github.com/waygu-music-plugin/sdk/protocol"
 
 	"waygu-music/internal/player/mpv"
-	"waygu-music/internal/pluginapi"
 )
 
 func (h platformHost) DesktopSettings() pluginapi.DesktopSettings {
 	a, s := h.a, &h.a.settings
-	var remaining int
-	if a.devClicks >= 3 && a.devClicks < 5 {
-		if time.Since(a.devClickTime) <= 3*time.Second {
-			remaining = 5 - a.devClicks
-		} else {
-			a.devClicks = 0
-		}
-	}
 	state := pluginapi.DesktopSettings{
 		Preferences: pluginapi.DesktopPreferences{
 			Appearance: s.Appearance, AppIcon: s.AppIcon, CacheMB: s.CacheMB,
@@ -25,11 +17,10 @@ func (h platformHost) DesktopSettings() pluginapi.DesktopSettings {
 			UseMPV: s.UseMPV, MPVExclusive: s.MPVExclusive, MPVGapless: s.MPVGapless,
 			MPVAudioDevice: s.MPVAudioDevice,
 		},
-		CacheUsed:              a.cacheUsed,
-		NotchAvailable:         a.quickPlayerWindow() != nil,
-		Updates:                a.updates,
-		DeveloperMode:          s.DeveloperMode,
-		VersionClicksRemaining: remaining,
+		CacheUsed:      a.cacheUsed,
+		CacheTask:      a.desktopTasks.latest[protocol.TaskCacheClear],
+		NotchAvailable: a.quickPlayerWindow() != nil,
+		Updates:        a.updates,
 	}
 	if a.updates {
 		state.UpdateChecks, state.UpdateDownloads = updateChecks(), updateDownloads()
@@ -56,7 +47,17 @@ func (a *app) saveQuickPlayerPreferences(p pluginapi.QuickPlayerPreferences) {
 }
 
 func (h platformHost) ApplyDesktopPreferences(p pluginapi.DesktopPreferences) {
-	a, s := h.a, &h.a.settings
+	if !h.canWrite() {
+		return
+	}
+	if err := h.a.applyDesktopPreferences(p); err != nil {
+		h.Toast(err.Error())
+	}
+}
+
+func (a *app) applyDesktopPreferences(p pluginapi.DesktopPreferences) error {
+	next := a.settings
+	s := &next
 	cacheChanged := s.CacheMB != p.CacheMB
 	iconChanged := s.AppIcon != p.AppIcon
 	appearanceChanged := s.Appearance != p.Appearance
@@ -67,11 +68,13 @@ func (h platformHost) ApplyDesktopPreferences(p pluginapi.DesktopPreferences) {
 	s.Smoke, s.Fog = p.Smoke, p.Fog
 	s.UseMPV, s.MPVExclusive, s.MPVGapless = p.UseMPV, p.MPVExclusive, p.MPVGapless
 	s.MPVAudioDevice = p.MPVAudioDevice
-	_ = s.save()
+	if err := s.save(); err != nil {
+		return err
+	}
+	a.settings = next
 	if appearanceChanged {
 		s.applyAppearance()
 	}
-	a.redraw()
 	if cacheChanged {
 		a.applyCacheLimit()
 	}
@@ -81,12 +84,16 @@ func (h platformHost) ApplyDesktopPreferences(p pluginapi.DesktopPreferences) {
 	if audioChanged {
 		a.syncMPVSettings()
 	}
+	a.desktopTasksChanged()
+	return nil
 }
 
 func (h platformHost) DecoderStatus() pluginapi.DecoderStatus {
 	a := h.a
+	download, remove := a.desktopTasks.latest[protocol.TaskDecoderDownload], a.desktopTasks.latest[protocol.TaskDecoderDelete]
 	status := pluginapi.DecoderStatus{
-		Ready: a.mpvReady(), Downloading: a.mpvDownloading, Done: a.mpvDone, Total: a.mpvTotal,
+		Ready: a.mpvReady(), Downloading: download.Running(), Done: a.mpvDone, Total: a.mpvTotal,
+		DownloadTask: download, DeleteTask: remove,
 	}
 	if !status.Downloading {
 		status.Downloaded = mpv.IsDownloaded()
@@ -104,11 +111,49 @@ func (h platformHost) DecoderStatus() pluginapi.DecoderStatus {
 	return status
 }
 
-func (h platformHost) ClearAudioCache()           { h.a.clearCache() }
-func (h platformHost) StartDecoderDownload()      { h.a.startMPVDownload() }
-func (h platformHost) CancelDecoderDownload()     { h.a.cancelMPVDownload() }
-func (h platformHost) DeleteDecoder()             { h.a.deleteMPV() }
-func (h platformHost) SetUpdateChecks(on bool)    { setUpdateChecks(on) }
-func (h platformHost) SetUpdateDownloads(on bool) { setUpdateDownloads(on) }
-func (h platformHost) CheckForUpdates()           { checkForUpdates() }
-func (h platformHost) RecordVersionClick()        { h.a.onVersionClicked() }
+func (h platformHost) ClearAudioCache() {
+	if !h.canWrite() {
+		return
+	}
+	if _, err := h.a.clearCache(); err != nil {
+		h.Toast(err.Error())
+	}
+}
+func (h platformHost) StartDecoderDownload() {
+	if !h.canWrite() {
+		return
+	}
+	if _, err := h.a.startMPVDownload(); err != nil {
+		h.Toast(err.Error())
+	}
+}
+func (h platformHost) CancelDecoderDownload() {
+	if !h.canWrite() {
+		return
+	}
+	_, _ = h.a.cancelMPVDownload(0, protocol.TaskCanceled)
+}
+func (h platformHost) DeleteDecoder() {
+	if !h.canWrite() {
+		return
+	}
+	h.a.deleteMPV()
+}
+func (h platformHost) SetUpdateChecks(on bool) {
+	if !h.canWrite() {
+		return
+	}
+	setUpdateChecks(on)
+}
+func (h platformHost) SetUpdateDownloads(on bool) {
+	if !h.canWrite() {
+		return
+	}
+	setUpdateDownloads(on)
+}
+func (h platformHost) CheckForUpdates() {
+	if !h.canWrite() {
+		return
+	}
+	checkForUpdates()
+}

@@ -6,26 +6,13 @@ import (
 	"path/filepath"
 
 	"github.com/egoist/mygo"
-	"waygu-music/internal/pluginapi"
-	"waygu-music/internal/pluginapi/eq"
+	"github.com/waygu-music-plugin/sdk/desktop"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi/eq"
+	"github.com/waygu-music-plugin/sdk/pluginapi/storage"
 )
 
-// desktopLyricsSettings are the desktop lyric window's persistent choices.
-// A pointer in settings keeps older settings files compatible: missing
-// desktop-lyrics data gets the current defaults on first use.
-type desktopLyricsSettings struct {
-	Locked          bool    `json:"locked,omitempty"`
-	ShowTranslation bool    `json:"showTranslation"`
-	FontSize        float32 `json:"fontSize,omitempty"`
-	Color           int     `json:"color,omitempty"`
-	X               int     `json:"x,omitempty"`
-	Y               int     `json:"y,omitempty"`
-	PositionSet     bool    `json:"positionSet,omitempty"`
-}
-
-func defaultDesktopLyricsSettings() desktopLyricsSettings {
-	return desktopLyricsSettings{ShowTranslation: true, FontSize: 30}
-}
+type desktopLyricsSettings = pluginapi.DesktopLyricsPreferences
 
 // settings are the listener's choices, kept in settings.json in the user
 // data directory.
@@ -176,6 +163,7 @@ func loadSettings(registrations ...pluginapi.Registration) settings {
 		}
 		s.path = path
 	}
+	s.rememberLegacySubsonicSession()
 	s.EQ.Normalize()
 	return s
 }
@@ -191,10 +179,7 @@ func (s settings) save() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, b, 0o600)
+	return storage.WriteDataFile(path, b)
 }
 
 func (s settings) marshalSettings() ([]byte, error) {
@@ -215,14 +200,4 @@ func (s settings) marshalSettings() ([]byte, error) {
 	return json.MarshalIndent(fields, "", "  ")
 }
 
-// applyAppearance makes the windows light, dark, or follow the system.
-func (s settings) applyAppearance() {
-	switch s.Appearance {
-	case "light":
-		mygo.Theme.SetSource(mygo.ThemeLight)
-	case "dark":
-		mygo.Theme.SetSource(mygo.ThemeDark)
-	default:
-		mygo.Theme.SetSource(mygo.ThemeSystem)
-	}
-}
+func (s settings) applyAppearance() { desktop.ApplyAppearance(s.Appearance) }

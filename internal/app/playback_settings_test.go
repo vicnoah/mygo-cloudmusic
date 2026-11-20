@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"waygu-music/internal/pluginapi/eq"
+	"github.com/waygu-music-plugin/sdk/pluginapi/eq"
 )
 
 // Tests that enabling the equalizer updates the player configuration and applies presets.

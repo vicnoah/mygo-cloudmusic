@@ -2,6 +2,7 @@ package dlna
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"github.com/supersonic-app/go-upnpcast/services/avtransport"
+
+	"github.com/waygu-music-plugin/sdk/pluginapi/network"
 )
 
 // TrackMeta contains track details required to build rich DIDL-Lite metadata for DLNA devices.
@@ -31,6 +34,7 @@ type TrackMeta struct {
 	Channels        int // e.g. 2
 	Headers         http.Header
 	Header          func() http.Header
+	Renew           network.MediaRenew
 	telemetry       *streamTelemetry
 }
 
@@ -269,6 +273,7 @@ func (c *Controller) registerTrack(meta TrackMeta, dev *Device) *avtransport.Med
 		ContentType:   mime,
 		ContentLength: meta.Size,
 		Header:        meta.Header,
+		Renew:         meta.Renew,
 		Telemetry:     meta.telemetry,
 	})
 
@@ -421,22 +426,32 @@ func (c *Controller) IsCasting() bool {
 	return c.activeDevice != nil
 }
 
-// Close shuts down the proxy and stops any active polling.
+// Close shuts down the proxy and gives pending renderer stops time to finish.
 func (c *Controller) Close() error {
 	c.mu.Lock()
-	if c.cancelPoll != nil {
-		c.cancelPoll()
-		c.cancelPoll = nil
-	}
 	c.stopDeviceLocked(c.activeDevice)
 	c.clearTracksLocked()
 	c.activeDevice = nil
+	stops := make([]<-chan struct{}, 0, len(c.remoteStops))
+	for _, stopped := range c.remoteStops {
+		stops = append(stops, stopped)
+	}
 	c.mu.Unlock()
 
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var err error
 	if c.proxy != nil {
-		return c.proxy.Close()
+		err = c.proxy.Close()
 	}
-	return nil
+	for _, stopped := range stops {
+		select {
+		case <-stopped:
+		case <-ctx.Done():
+			return errors.Join(err, ctx.Err())
+		}
+	}
+	return err
 }
 
 func (c *Controller) notify() {

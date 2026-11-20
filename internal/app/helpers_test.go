@@ -2,14 +2,15 @@ package app
 
 import (
 	"github.com/egoist/mygo/ui"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi/artwork"
 
 	"waygu-music/internal/player"
-	"waygu-music/internal/pluginapi"
 )
 
 func newTestApp() *app {
 	a := &app{}
-	a.art = newArtCache(func(func()) {})
+	a.art = artwork.NewCache(func(func()) {})
 	a.pl = player.New(func(func()) {})
 	a.pl.SetVolume(0.5)
 	return a

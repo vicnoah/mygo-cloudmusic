@@ -92,6 +92,9 @@ var (
 func Download(ctx context.Context, onProgress func(done, total int64)) error {
 	dlMu.Lock()
 	defer dlMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	asset, ok := NativeAssets[Platform()]
 	if !ok {
@@ -140,36 +143,35 @@ func Download(ctx context.Context, onProgress func(done, total int64)) error {
 	}
 	defer gzr.Close()
 
-	tmpFile := targetPath + ".part"
-	f, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	f, err := os.CreateTemp(dir, asset.Name+"-*.part")
 	if err != nil {
 		return err
 	}
+	tmpFile := f.Name()
+	defer os.Remove(tmpFile)
 
 	hasher := sha256.New()
 	mw := io.MultiWriter(f, hasher)
 
 	if _, err := io.Copy(mw, gzr); err != nil {
 		f.Close()
-		_ = os.Remove(tmpFile)
 		return fmt.Errorf("mpv: unpack: %w", err)
 	}
-	_ = f.Sync()
-	f.Close()
+	if err := errors.Join(f.Chmod(0755), f.Sync(), f.Close()); err != nil {
+		return err
+	}
 
 	if asset.SHA256 != "" {
 		sum := hex.EncodeToString(hasher.Sum(nil))
 		if sum != asset.SHA256 {
-			_ = os.Remove(tmpFile)
 			return errors.New("mpv: checksum mismatch for downloaded library")
 		}
 	}
 
-	if err := os.Rename(tmpFile, targetPath); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	return nil
+	return os.Rename(tmpFile, targetPath)
 }
 
 // Delete removes the downloaded libmpv files from the cache directory.

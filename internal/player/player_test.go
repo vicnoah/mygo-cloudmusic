@@ -1,6 +1,7 @@
 package player
 
 import (
+	"context"
 	"math"
 	"os"
 	"testing"
@@ -8,7 +9,7 @@ import (
 
 	"github.com/egoist/mygo/audio"
 
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 func TestPlayEmptyQueue(t *testing.T) {
@@ -144,9 +145,9 @@ func TestRadioRefills(t *testing.T) {
 	p := &Player{at: -1}
 	p.Cue([]pluginapi.Track{{ID: 1}, {ID: 2}})
 	asked := 0
-	p.AttachRadio("fm:DEFAULT", func(got func([]pluginapi.Track)) {
+	p.AttachRadio("fm:DEFAULT", func(_ context.Context, _ pluginapi.QueueFeedCursor, got func([]pluginapi.Track, error)) {
 		asked++
-		got([]pluginapi.Track{{ID: 2}, {ID: 3}})
+		got([]pluginapi.Track{{ID: 2}, {ID: 3}}, nil)
 	})
 	if asked != 1 || len(p.Queue()) != 3 || p.Queue()[2].ID != 3 {
 		t.Fatalf("asked %d, queue %v", asked, p.Queue())
@@ -158,6 +159,53 @@ func TestRadioRefills(t *testing.T) {
 	p.endRadio()
 	if p.Radio() != "" || p.feed != nil {
 		t.Error("radio still on")
+	}
+}
+
+// A failed page used to stop the list as if it had ended. Play retries that page.
+func TestPlayRetriesFailedQueueRefill(t *testing.T) {
+	p := &Player{at: -1, post: func(func()) {}}
+	t.Cleanup(p.Reset)
+	var cursors []pluginapi.QueueFeedCursor
+	var complete func([]pluginapi.Track, error)
+	p.PlayList([]pluginapi.Track{{ID: 21}}, 0, func(_ context.Context, cursor pluginapi.QueueFeedCursor, done func([]pluginapi.Track, error)) {
+		cursors = append(cursors, cursor)
+		complete = done
+	})
+	p.Next()
+	complete(nil, pluginapi.ErrQueueFeedUnavailable)
+	if p.Playing() || p.Loading() || p.Current().ID != 21 || len(p.Queue()) != 1 {
+		t.Fatalf("failed refill altered the queue or kept it waiting: %v", p.Queue())
+	}
+	p.TogglePlay()
+	if len(cursors) != 2 || cursors[0] != cursors[1] || cursors[1].Page != 0 || cursors[1].LastID != 21 {
+		t.Fatalf("retry did not ask again for the same page: %+v", cursors)
+	}
+	complete([]pluginapi.Track{{ID: 22}}, nil)
+	if !p.Playing() || p.Current().ID != 22 || len(p.Queue()) != 2 {
+		t.Fatalf("successful retry did not advance playback: %v", p.Queue())
+	}
+	if len(cursors) != 3 || cursors[2] != (pluginapi.QueueFeedCursor{Page: 1, FirstID: 21, LastID: 22}) {
+		t.Fatalf("next refill did not use the accepted page and new tail: %+v", cursors)
+	}
+}
+
+// Replacing the queue cancels its provider request and ignores a late page.
+func TestReplacingQueueCancelsRefill(t *testing.T) {
+	p := &Player{at: -1, post: func(func()) {}}
+	t.Cleanup(p.Reset)
+	var request context.Context
+	var complete func([]pluginapi.Track, error)
+	p.PlayList([]pluginapi.Track{{ID: 31}}, 0, func(ctx context.Context, _ pluginapi.QueueFeedCursor, done func([]pluginapi.Track, error)) {
+		request, complete = ctx, done
+	})
+	p.PlayQueue([]pluginapi.Track{{ID: 41}}, 0)
+	if request == nil || request.Err() != context.Canceled {
+		t.Fatal("replacing the queue left the previous refill running")
+	}
+	complete([]pluginapi.Track{{ID: 32}}, nil)
+	if p.Current().ID != 41 || len(p.Queue()) != 1 {
+		t.Fatalf("canceled refill changed the queue: %v", p.Queue())
 	}
 }
 
@@ -229,7 +277,7 @@ func TestEndRadio(t *testing.T) {
 	p.Cue([]pluginapi.Track{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}})
 	p.at, p.track = 1, &p.queue[1]
 	asked := 0
-	p.AttachRadio("heart", func(got func([]pluginapi.Track)) { asked++ })
+	p.AttachRadio("heart", func(_ context.Context, _ pluginapi.QueueFeedCursor, got func([]pluginapi.Track, error)) { asked++ })
 	p.EndRadio()
 	if p.Radio() != "" || p.Current().ID != 2 {
 		t.Fatalf("radio %q, current %v", p.Radio(), p.Current())

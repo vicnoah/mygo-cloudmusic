@@ -1,106 +1,41 @@
-# Pushing a tag such as v0.2.0 builds the apps of macOS, Windows and
-# Linux, signs updates (and macOS where configured), and uploads them to a draft
-# release of the tag, which is published by hand: installed apps update
-# to it then.
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "!v*-alpha.*"]
 
 permissions:
-  contents: write # the draft release, and the uploads to it
+  contents: write
 
 jobs:
-  draft-release:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # mygo build uploads to the release of mygo.json's version, whichever
-      # tag started the workflow.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
       - name: Check the version
         run: test "$GITHUB_REF_NAME" = "v$(jq -r .version mygo.json)"
-      # mygo build puts the version's section of CHANGELOG.md in the update
-      # manifests, which the update window shows; the release page gets the
-      # same notes, in place of GitHub's from the pull requests.
-      - name: Take the notes from the changelog
+      - name: Install NSIS
+        run: sudo apt-get update && sudo apt-get install -y nsis
+      - name: Prepare the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           awk -v heading="## ${GITHUB_REF_NAME#v}" '
             /^## / { inside = ($0 == heading); next }
             inside
           ' CHANGELOG.md | sed '/./,$!d' > "$RUNNER_TEMP/notes.md"
           test -s "$RUNNER_TEMP/notes.md"
-          cat "$RUNNER_TEMP/notes.md"
-      - name: Create the draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
           if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
               --draft --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"
           fi
-
-  build:
-    needs: draft-release
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: macOS, os: macos-latest, platform: "darwin/arm64,darwin/amd64" }
-          - { name: Windows, os: ubuntu-latest, platform: "windows/amd64,windows/arm64" }
-          - { name: Linux, os: ubuntu-latest, platform: "linux/amd64,linux/arm64" }
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - name: Install NSIS, for the Windows installers
-        if: matrix.name == 'Windows'
-        run: sudo apt-get update && sudo apt-get install -y nsis
-      - name: Disable unavailable macOS signing
-        if: matrix.name == 'macOS'
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-        run: |
-          if [ -z "$MACOS_CERTIFICATE" ]; then
-            jq 'del(.macos.signingIdentity, .macos.notarize)' mygo.json > "$RUNNER_TEMP/mygo.json"
-            mv "$RUNNER_TEMP/mygo.json" mygo.json
-            echo 'No macOS certificate configured; building an unsigned app.'
-          fi
-      # The certificate signs the app; the notary profile, "notary" in
-      # mygo.json, notarizes its disk image. Both go in a keychain of the
-      # job, made the default one, where codesign and notarytool look.
-      - name: Import the certificate and the notary credentials
-        if: matrix.name == 'macOS'
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          if [ -z "$MACOS_CERTIFICATE" ]; then
-            echo 'No macOS certificate configured; skipping certificate import.'
-            exit 0
-          fi
-          keychain="$RUNNER_TEMP/signing.keychain-db"
-          password="$(openssl rand -base64 24)"
-          security create-keychain -p "$password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$password" "$keychain"
-          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
-          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
-            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          rm "$RUNNER_TEMP/certificate.p12"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
-          security list-keychains -d user -s "$keychain" login.keychain
-          security default-keychain -d user -s "$keychain"
-          xcrun notarytool store-credentials notary --keychain "$keychain" \
-            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
-      - name: Build and upload
+      - name: Cross-build and upload
         env:
           GH_TOKEN: ${{ github.token }}
           MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
-        run: go tool mygo build -platform "${{ matrix.platform }}" -upload
+        run: |
+          go tool mygo build -sign - -skip-dmg -skip-notarize -upload \
+            -platform "darwin/amd64,darwin/arm64,windows/amd64,windows/arm64,linux/amd64,linux/arm64"

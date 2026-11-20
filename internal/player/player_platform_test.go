@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 // Reset drops the current song and queue so a platform switch cannot retain playback.
@@ -14,7 +14,7 @@ func TestResetDropsPlaybackContext(t *testing.T) {
 	p := &Player{at: -1, shuffle: true, repeat: RepeatOne}
 	p.Cue([]pluginapi.Track{{ID: 1, Name: "一"}, {ID: 2, Name: "二"}})
 	p.radio = "radio"
-	p.feed = func(func([]pluginapi.Track)) {}
+	p.feed = func(context.Context, pluginapi.QueueFeedCursor, func([]pluginapi.Track, error)) {}
 	p.playing = true
 	p.Reset()
 	if p.Current() != nil || len(p.Queue()) != 0 || p.Radio() != "" || p.Playing() {

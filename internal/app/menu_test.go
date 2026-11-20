@@ -4,8 +4,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo"
-
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 // Queued app and tray menu clicks from a previous activation cannot change playback or desktop lyrics after switching back.
@@ -30,17 +29,18 @@ func TestNativeMenuActionsFollowActivation(t *testing.T) {
 	defer a.deactivatePlatformView(false)
 	oldApp := a.platformMenu(pluginapi.ApplicationMenu)
 	oldTray := a.trayMenu()
+	h := platformHost{a: a}
 	a.setPlatform("other")
 	a.setPlatform("owner")
 
 	clickMenuAction(t, oldApp.Items(), "Shuffle")
 	clickMenuAction(t, oldTray.Items(), "Lock lyrics")
-	if a.pl.Shuffle() || a.desktopLyricsLocked {
+	if a.pl.Shuffle() || h.DesktopLyricsLocked() {
 		t.Fatal("an older activation's menu changed the selected platform")
 	}
 	clickMenuAction(t, a.platformMenu(pluginapi.ApplicationMenu).Items(), "Shuffle")
 	clickMenuAction(t, a.trayMenu().Items(), "Lock lyrics")
-	if !a.pl.Shuffle() || !a.desktopLyricsLocked {
+	if !a.pl.Shuffle() || !h.DesktopLyricsLocked() {
 		t.Fatal("the selected platform's menu actions did not take effect")
 	}
 }

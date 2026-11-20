@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	eqpkg "waygu-music/internal/pluginapi/eq"
+	eqpkg "github.com/waygu-music-plugin/sdk/pluginapi/eq"
 )
 
 // AudioDevice describes an audio output device enumerated by MPV.
@@ -74,8 +74,9 @@ type Engine struct {
 	cfg    Config
 	closed bool
 
-	onEnd   func()
-	onError func(string)
+	onEnd             func()
+	onError           func(string)
+	onPlaybackRestart func()
 
 	playing   bool
 	position  time.Duration
@@ -85,8 +86,6 @@ type Engine struct {
 	eqType    string
 	eqPreamp  float64
 	eqBands   []float64
-
-	eventDone chan struct{}
 }
 
 // NewEngine creates and configures a high-quality audio playback engine.
@@ -134,7 +133,6 @@ func NewEngine(cfg Config) (*Engine, error) {
 		eqType:    cfg.EqualizerType,
 		eqPreamp:  cfg.EqualizerPreamp,
 		eqBands:   cfg.EqualizerBands,
-		eventDone: make(chan struct{}),
 	}
 
 	// Apply initial equalizer filters if enabled
@@ -166,19 +164,22 @@ func (e *Engine) Play(sourceURL string, headers map[string]string, startPos time
 		e.inst.SetProperty("http-header-fields", strings.Join(hList, ", "))
 	}
 
-	// Load file
-	code := e.inst.Command([]string{"loadfile", sourceURL, "replace"})
+	args := []string{"loadfile", sourceURL, "replace"}
+	if startPos > 0 {
+		// MPV 0.38 added an index argument before the per-file options.
+		const indexArgumentAPI = 2<<16 | 3
+		if mpvLib.clientAPIVersion() >= indexArgumentAPI {
+			args = append(args, "-1")
+		}
+		args = append(args, fmt.Sprintf("start=%.3f", startPos.Seconds()))
+	}
+	code := e.inst.Command(args)
 	if code < 0 {
 		return fmt.Errorf("mpv: loadfile failed with error %d", code)
 	}
 
 	e.position = startPos
 	e.duration = 0
-
-	// If start position is specified, seek right away
-	if startPos > 0 {
-		e.inst.Command([]string{"seek", fmt.Sprintf("%.3f", startPos.Seconds()), "absolute"})
-	}
 
 	e.inst.SetProperty("pause", "no")
 	e.playing = true
@@ -361,6 +362,13 @@ func (e *Engine) OnError(fn func(string)) {
 	e.onError = fn
 }
 
+// OnPlaybackRestart runs when MPV has loaded audio or settled after a seek.
+func (e *Engine) OnPlaybackRestart(fn func()) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onPlaybackRestart = fn
+}
+
 func (e *Engine) runEvents() {
 	for {
 		e.mu.RLock()
@@ -398,10 +406,13 @@ func (e *Engine) runEvents() {
 					onEnd()
 				}
 			}
-		case EventFileLoaded, EventPlaybackRestart:
-			e.mu.Lock()
-			e.playing = true
-			e.mu.Unlock()
+		case EventPlaybackRestart:
+			e.mu.RLock()
+			restart := e.onPlaybackRestart
+			e.mu.RUnlock()
+			if restart != nil {
+				restart()
+			}
 		}
 	}
 }

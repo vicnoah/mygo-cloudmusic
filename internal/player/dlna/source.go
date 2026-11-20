@@ -14,20 +14,10 @@ import (
 // PrepareMP3 checks that the platform honored the requested format. A server
 // that cannot serve byte ranges is staged so the renderer can seek.
 func (p *Proxy) PrepareMP3(ctx context.Context, src StreamSource, dst io.Writer) (size int64, staged bool, err error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.RemoteURL, nil)
-	if err != nil {
-		return 0, false, errors.New("兼容音源地址无效")
-	}
-	req.Header = src.requestHeaders().Clone()
-	if req.Header == nil {
-		req.Header = make(http.Header)
-	}
-	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("Range", "bytes=0-4095")
-	if req.Header.Get("User-Agent") == "" {
-		req.Header.Set("User-Agent", defaultUserAgent)
-	}
-	resp, err := p.client.Do(req)
+	resp, err := src.upstream().Open(ctx, p.client, http.MethodGet, http.Header{
+		"Accept-Encoding": {"identity"},
+		"Range":           {"bytes=0-4095"},
+	})
 	if err != nil {
 		if ctx.Err() != nil {
 			return 0, false, ctx.Err()

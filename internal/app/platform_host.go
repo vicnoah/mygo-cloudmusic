@@ -4,12 +4,33 @@ import (
 	"context"
 
 	"github.com/egoist/mygo/ui"
-
-	appplatform "waygu-music/internal/pluginapi"
-	"waygu-music/internal/pluginapi/network"
+	appplatform "github.com/waygu-music-plugin/sdk/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi/artwork"
+	"github.com/waygu-music-plugin/sdk/pluginapi/network"
 )
 
-type platformHost struct{ a *app }
+type platformHost struct {
+	a  *app
+	id appplatform.ID
+}
+
+func (h platformHost) authorization() (context.Context, func() bool) {
+	if h.id == "" {
+		return nil, nil
+	}
+	authority := h.a.platformAuthority.Load()
+	if authority == nil || authority.id != h.id {
+		return nil, func() bool { return false }
+	}
+	return authority.ctx, func() bool { return h.a.platformAuthority.Load() == authority }
+}
+
+func (h platformHost) canWrite() bool {
+	authority := h.a.platformAuthority.Load()
+	return h.id == "" || (authority != nil && authority.id == h.id)
+}
+
+func allowedWrite(guard func() bool) bool { return guard == nil || guard() }
 
 // fetchArtwork sends scoped references to their owner and supports legacy
 // unscoped URLs using the instance captured when the request was made.
@@ -32,55 +53,81 @@ func (h platformHost) fetchArtwork(ctx context.Context, current appplatform.ID, 
 	return network.FetchContext(ctx, raw)
 }
 
-func (h platformHost) Post(fn func()) { h.a.post(fn) }
-func (h platformHost) Invalidate()    { h.a.redraw() }
-func (h platformHost) ShowMain()      { h.a.showMain() }
+func (h platformHost) Post(fn func()) { h.a.post(h.activationCallback(fn)) }
+
+// An asynchronous result queued by an earlier activation cannot write after
+// switching away and returning to the same platform.
+func (h platformHost) activationCallback(fn func()) func() {
+	_, guard := h.authorization()
+	return func() {
+		if allowedWrite(guard) {
+			fn()
+		}
+	}
+}
+
+func (h platformHost) Invalidate() {
+	if h.canWrite() {
+		h.a.redraw()
+	}
+}
+
+func (h platformHost) ShowMain() {
+	if h.canWrite() {
+		h.a.showMain()
+	}
+}
+
 func (h platformHost) Toast(msg string) {
+	if !h.canWrite() {
+		return
+	}
 	h.a.toast = msg
 	h.a.redraw()
 }
 
 func (h platformHost) TakeToast() string {
+	if !h.canWrite() {
+		return ""
+	}
 	toast := h.a.toast
 	h.a.toast = ""
 	return toast
 }
+
 func (h platformHost) Player() appplatform.PlayerPort {
 	if h.a == nil || h.a.pl == nil {
 		return nil
 	}
-	return sharedPlayer{h.a.pl}
+	scope, guard := h.authorization()
+	return sharedPlayer{p: h.a.pl, write: guard, scope: scope, owns: h.ownsTracks}
 }
 
-func (h platformHost) SwitchPlatform(id appplatform.ID) { h.a.setPlatform(id) }
-
-func (h platformHost) PlatformConfigured(id appplatform.ID) bool {
-	if adapter := h.a.platforms[id]; adapter != nil {
-		return adapter.Configured()
-	}
-	return true
+func (h platformHost) ownsTracks(tracks []appplatform.Track) bool {
+	return h.id == "" || h.a.ownsTracksFor(h.id, tracks)
 }
 
 func (h platformHost) GlobalSearchHistory() []string {
 	return append([]string(nil), h.a.settings.SearchHistory...)
 }
 
-func (h platformHost) RememberGlobalSearch(q string) { h.a.rememberSearch(q) }
+func (h platformHost) RememberGlobalSearch(q string) {
+	if h.canWrite() {
+		h.a.rememberSearch(q)
+	}
+}
 
-func (h platformHost) ClearSearchHistory() { h.a.clearSearchHistory() }
+func (h platformHost) ClearSearchHistory() {
+	if h.canWrite() {
+		h.a.clearSearchHistory()
+	}
+}
 
 func (h platformHost) CurrentPlatform() appplatform.ID {
 	if h.a == nil {
 		return ""
 	}
 	return h.a.platformID
-}
-
-func (h platformHost) PlatformOptions() []appplatform.Info {
-	if h.a == nil {
-		return nil
-	}
-	return h.a.platformInfos()
 }
 
 func (h platformHost) Artwork(url string, size int) (*ui.Bitmap, bool) {
@@ -91,16 +138,16 @@ func (h platformHost) Artwork(url string, size int) (*ui.Bitmap, bool) {
 	if art == nil {
 		return nil, false
 	}
-	return art.bmp, true
+	return art.Bitmap(), true
 }
 
-func (h platformHost) cachedArtwork(raw string, size int, backdrop bool) *artwork {
+func (h platformHost) cachedArtwork(raw string, size int, backdrop bool) *artwork.CachedImage {
 	url := network.SizedArtworkURL(raw, size)
 	key := url
 	if _, _, scoped := appplatform.ArtworkOwner(raw); !scoped {
 		key = appplatform.ArtworkURL(h.a.platformID, url)
 	}
-	return h.a.art.get(key, url, backdrop)
+	return h.a.art.Get(key, url, backdrop)
 }
 
 func (h platformHost) PlaybackLevels() ([appplatform.SpectrumBands]float32, bool) {
@@ -110,18 +157,29 @@ func (h platformHost) PlaybackLevels() ([appplatform.SpectrumBands]float32, bool
 	return h.a.pl.Levels()
 }
 
-func (h platformHost) CopyText(text string) { copyText(text) }
+func (h platformHost) CopyText(text string) {
+	if h.canWrite() {
+		copyText(text)
+	}
+}
 
-func (h platformHost) OpenSettings() { h.a.openSettings() }
+func (h platformHost) OpenSettings() {
+	if h.canWrite() {
+		h.a.openSettings()
+	}
+}
 
 func (h platformHost) CloseSettings() {
-	if win := h.a.settingsWin; win != nil {
+	if win := h.a.settingsWin; h.canWrite() && win != nil {
 		win.Close()
 	}
 }
 
 type sharedPlayer struct {
-	p interface {
+	write func() bool
+	scope context.Context
+	owns  func([]appplatform.Track) bool
+	p     interface {
 		Current() *appplatform.Track
 		Playing() bool
 		Loading() bool
@@ -132,8 +190,8 @@ type sharedPlayer struct {
 		PlayOrder() ([]int, int)
 		PlayQueue([]appplatform.Track, int)
 		AppendQueue([]appplatform.Track)
-		PlayList([]appplatform.Track, int, func(func([]appplatform.Track)))
-		PlayRadio(string, []appplatform.Track, func(func([]appplatform.Track)))
+		PlayList([]appplatform.Track, int, appplatform.QueueFeed)
+		PlayRadio(string, []appplatform.Track, appplatform.QueueFeed)
 		EndRadio()
 		Radio() string
 		ToggleShuffle()
@@ -141,26 +199,81 @@ type sharedPlayer struct {
 	}
 }
 
-func (p sharedPlayer) Current() *appplatform.Track            { return p.p.Current() }
-func (p sharedPlayer) Playing() bool                          { return p.p.Playing() }
-func (p sharedPlayer) Loading() bool                          { return p.p.Loading() }
-func (p sharedPlayer) Err() string                            { return p.p.Err() }
-func (p sharedPlayer) TogglePlay()                            { p.p.TogglePlay() }
-func (p sharedPlayer) Next()                                  { p.p.Next() }
-func (p sharedPlayer) Queue() []appplatform.Track             { return p.p.Queue() }
-func (p sharedPlayer) PlayOrder() ([]int, int)                { return p.p.PlayOrder() }
-func (p sharedPlayer) PlayQueue(t []appplatform.Track, i int) { p.p.PlayQueue(t, i) }
-func (p sharedPlayer) AppendQueue(t []appplatform.Track)      { p.p.AppendQueue(t) }
-func (p sharedPlayer) PlayList(t []appplatform.Track, i int, f func(func([]appplatform.Track))) {
-	p.p.PlayList(t, i, f)
+func (p sharedPlayer) Current() *appplatform.Track { return p.p.Current() }
+func (p sharedPlayer) Playing() bool               { return p.p.Playing() }
+func (p sharedPlayer) Loading() bool               { return p.p.Loading() }
+func (p sharedPlayer) Err() string                 { return p.p.Err() }
+func (p sharedPlayer) Queue() []appplatform.Track  { return p.p.Queue() }
+func (p sharedPlayer) PlayOrder() ([]int, int)     { return p.p.PlayOrder() }
+func (p sharedPlayer) TogglePlay() {
+	if allowedWrite(p.write) {
+		p.p.TogglePlay()
+	}
 }
-func (p sharedPlayer) PlayRadio(n string, t []appplatform.Track, f func(func([]appplatform.Track))) {
-	p.p.PlayRadio(n, t, f)
+
+func (p sharedPlayer) Next() {
+	if allowedWrite(p.write) {
+		p.p.Next()
+	}
 }
-func (p sharedPlayer) EndRadio()     { p.p.EndRadio() }
+
+func (p sharedPlayer) PlayQueue(t []appplatform.Track, i int) {
+	if allowedWrite(p.write) && 0 <= i && i < len(t) && p.owns(t) {
+		p.p.PlayQueue(t, i)
+	}
+}
+
+func (p sharedPlayer) AppendQueue(t []appplatform.Track) {
+	if allowedWrite(p.write) && p.owns(t) {
+		p.p.AppendQueue(t)
+	}
+}
+
+func (p sharedPlayer) PlayList(t []appplatform.Track, i int, f appplatform.QueueFeed) {
+	if allowedWrite(p.write) && 0 <= i && i < len(t) && p.owns(t) {
+		p.p.PlayList(t, i, scopedQueueFeed(p.scope, p.write, p.owns, f))
+	}
+}
+
+func (p sharedPlayer) PlayRadio(n string, t []appplatform.Track, f appplatform.QueueFeed) {
+	if allowedWrite(p.write) && p.owns(t) {
+		p.p.PlayRadio(n, t, scopedQueueFeed(p.scope, p.write, p.owns, f))
+	}
+}
+
+func scopedQueueFeed(scope context.Context, write func() bool, owns func([]appplatform.Track) bool, f appplatform.QueueFeed) appplatform.QueueFeed {
+	if f == nil || scope == nil || write == nil {
+		return f
+	}
+	return func(ctx context.Context, cursor appplatform.QueueFeedCursor, out func([]appplatform.Track, error)) {
+		if !write() || scope.Err() != nil {
+			return
+		}
+		ctx, cancel := context.WithCancel(ctx)
+		stop := context.AfterFunc(scope, cancel)
+		context.AfterFunc(ctx, func() { stop() })
+		f(ctx, cursor, func(tracks []appplatform.Track, err error) {
+			defer cancel()
+			if ctx.Err() == nil && scope.Err() == nil && write() {
+				if err == nil && !owns(tracks) {
+					out(nil, appplatform.ErrQueueFeedUnavailable)
+					return
+				}
+				out(tracks, err)
+			}
+		})
+	}
+}
+
+func (p sharedPlayer) EndRadio() {
+	if allowedWrite(p.write) {
+		p.p.EndRadio()
+	}
+}
+
 func (p sharedPlayer) Radio() string { return p.p.Radio() }
 func (p sharedPlayer) SetShuffle(on bool) {
-	if p.p.Shuffle() != on {
+	if allowedWrite(p.write) && p.p.Shuffle() != on {
 		p.p.ToggleShuffle()
 	}
 }

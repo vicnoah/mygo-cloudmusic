@@ -3,8 +3,7 @@ package app
 import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 type mountedWindow struct {
@@ -21,7 +20,7 @@ func (a *app) syncPlatformWindows() {
 		settings.Destroy()
 	}
 	if windows[pluginapi.DesktopLyricsWindow].Root == nil {
-		a.destroyDesktopLyrics()
+		a.desktopLyrics.Destroy()
 	} else {
 		a.newDesktopLyrics()
 	}
@@ -73,6 +72,9 @@ func (a *app) windowOptions(id pluginapi.WindowID) mygo.WindowOptions {
 
 func (a *app) windowRoot(id pluginapi.WindowID) func(*ui.Context) {
 	return func(c *ui.Context) {
+		if id == pluginapi.MainWindow && a.hasPluginManager() {
+			c.OnShortcut(ui.Cmd|ui.Shift, ui.KeyP, a.openPluginManager)
+		}
 		if root := a.platformWindows[a.platformID][id].Root; root != nil {
 			// A reused window must not carry widget input into a different
 			// activation just because both roots use the same widget keys.

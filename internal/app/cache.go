@@ -1,9 +1,11 @@
 package app
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"github.com/egoist/mygo"
+	"github.com/waygu-music-plugin/sdk/protocol"
 
 	"waygu-music/internal/player"
 )
@@ -22,9 +24,14 @@ func newSongCache(mb int) *player.Cache {
 func (a *app) applyCacheLimit() {
 	if cache := a.pl.Cache; cache != nil {
 		limit := int64(a.settings.CacheMB) << 20
+		revision := a.cacheLimitRev.Add(1)
 		go func() {
-			cache.SetLimit(limit)
-			a.measureCache()
+			a.cacheLimitMu.Lock()
+			if a.cacheLimitRev.Load() == revision {
+				cache.SetLimit(limit)
+			}
+			a.cacheLimitMu.Unlock()
+			postDesktopTask(a, a.measureCache)
 		}()
 	}
 }
@@ -33,26 +40,46 @@ func (a *app) applyCacheLimit() {
 // settings to show.
 func (a *app) measureCache() {
 	cache := a.pl.Cache
-	if cache == nil {
+	if cache == nil || a.desktopTasks.latest[protocol.TaskCacheClear].Phase == protocol.TaskRunning {
 		return
 	}
+	a.cacheMeasure++
+	measure := a.cacheMeasure
 	go func() {
-		n := cache.Size()
-		a.post(func() {
-			a.cacheUsed = n
-			if a.settingsWin != nil {
-				a.settingsWin.Invalidate()
+		n, err := cache.Measure()
+		postDesktopTask(a, func() {
+			if err == nil && a.cacheMeasure == measure {
+				a.cacheUsed = n
+				a.desktopTasksChanged()
 			}
 		})
 	}()
 }
 
-func (a *app) clearCache() {
-	if cache := a.pl.Cache; cache != nil {
-		a.cacheUsed = 0
-		go func() {
-			cache.Clear()
-			a.measureCache()
-		}()
+func (a *app) clearCache() (protocol.DesktopTask, error) {
+	cache := a.pl.Cache
+	if cache == nil {
+		return protocol.DesktopTask{}, protocol.Failure{Code: "cache-unavailable"}
 	}
+	if task := a.desktopTasks.latest[protocol.TaskCacheClear]; task.Phase == protocol.TaskRunning {
+		return task, nil
+	}
+	a.cacheMeasure++
+	task := a.beginDesktopTask(protocol.TaskCacheClear)
+	go func() {
+		err := cache.Clear()
+		n, measurementErr := cache.Measure()
+		postDesktopTask(a, func() {
+			if measurementErr == nil {
+				a.cacheUsed = n
+			} else if err == nil {
+				err = measurementErr
+			}
+			if err != nil {
+				err = fmt.Errorf("清除歌曲缓存失败（%w）", err)
+			}
+			a.completeDesktopTask(task, err)
+		})
+	}()
+	return task, nil
 }

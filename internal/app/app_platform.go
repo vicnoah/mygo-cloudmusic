@@ -3,8 +3,8 @@ package app
 import (
 	"context"
 
-	"waygu-music/internal/pluginapi"
-	"waygu-music/internal/pluginapi/network"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi/network"
 )
 
 // Platform extension seam.
@@ -24,32 +24,31 @@ func (a *app) activePlatform() pluginapi.Adapter {
 func (a *app) initPlatformState() bool {
 	newPlatformAdapters(a)
 	id := pluginapi.ID(a.settings.Platform)
-	if !a.hasPlatform(id) {
-		id = ""
-		for _, entry := range a.platformRegistrations {
-			if !a.hasPlatform(entry.ID) {
-				continue
-			}
-			if a.settings.DeveloperMode || !entry.DeveloperOnly {
-				id = entry.ID
-				break
-			}
-			if id == "" {
-				id = entry.ID
-			}
-		}
+	if !a.hasPlatform(id) || a.localPlugins[id] != nil {
+		id = a.defaultPlatform()
 	}
 	a.platformID = id
 	if id == "" {
 		return false
 	}
-	a.settings.Platform = string(id)
+	if a.settings.Platform == "" {
+		a.settings.Platform = string(id)
+	}
 	return true
+}
+
+func (a *app) defaultPlatform() pluginapi.ID {
+	for _, entry := range a.platformRegistrations {
+		if a.localPlugins[entry.ID] == nil && a.hasPlatform(entry.ID) {
+			return entry.ID
+		}
+	}
+	return ""
 }
 
 func (a *app) configurePlatformPlayer() {
 	if a.art != nil {
-		a.art.fetch = func() func(string) ([]byte, error) {
+		a.art.SetFetcher(func() func(string) ([]byte, error) {
 			owner, ctx := a.platformID, a.platformContext
 			if ctx == nil {
 				ctx = context.Background()
@@ -57,8 +56,7 @@ func (a *app) configurePlatformPlayer() {
 			return func(url string) ([]byte, error) {
 				return (platformHost{a: a}).fetchArtwork(ctx, owner, url)
 			}
-		}
-		a.art.generation = func() uint64 { return a.platformGeneration }
+		}, func() uint64 { return a.platformGeneration })
 	}
 	if a.pl == nil {
 		return
@@ -146,30 +144,28 @@ func (a *app) platformReady(coldStart bool) {
 }
 
 func (a *app) activatePlatformView() {
+	if remote := a.remoteActive(); remote != nil {
+		a.platformScope = remote.scope
+	} else {
+		a.platformScope = a.pluginActivations.Prepare("builtin:" + string(a.platformID))
+		a.pluginActivations.Commit(a.platformScope)
+	}
 	a.platformContext, a.cancelPlatform = context.WithCancel(context.Background())
+	a.platformAuthority.Store(&platformAuthority{id: a.platformID, ctx: a.platformContext})
 	if activate := a.platformLifecycles[a.platformID].Activate; activate != nil {
 		activate(a.platformContext, playbackContinuity{a: a, ctx: a.platformContext})
 	}
 }
 
 func (a *app) deactivatePlatformView(switching bool) {
+	a.platformAuthority.Store(nil)
+	a.pluginActivations.Revoke(a.platformScope)
 	if a.cancelPlatform != nil {
 		a.cancelPlatform()
 	}
 	if deactivate := a.platformLifecycles[a.platformID].Deactivate; deactivate != nil {
 		deactivate(switching)
 	}
-}
-
-// platformInfos shows the plugins in registration order.
-func (a *app) platformInfos() []pluginapi.Info {
-	var infos []pluginapi.Info
-	for _, entry := range a.platformRegistrations {
-		if a.hasPlatform(entry.ID) && (!entry.DeveloperOnly || a.settings.DeveloperMode) {
-			infos = append(infos, entry.Info)
-		}
-	}
-	return infos
 }
 
 func (a *app) hasPlatform(id pluginapi.ID) bool {
@@ -198,4 +194,13 @@ func (a *app) trackAdapter(tr *pluginapi.Track) pluginapi.Adapter {
 		return a.platforms[id]
 	}
 	return nil
+}
+
+func (a *app) ownsTracksFor(id pluginapi.ID, tracks []pluginapi.Track) bool {
+	for i := range tracks {
+		if owner, ok := a.trackPlatform(&tracks[i]); !ok || owner != id {
+			return false
+		}
+	}
+	return true
 }

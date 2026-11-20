@@ -2,12 +2,20 @@ package app
 
 import (
 	"github.com/egoist/mygo"
-
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 // openSettings shows the settings window, opening it the first time.
 func (a *app) openSettings() {
+	for _, local := range a.localPlugins {
+		if local.pending != nil {
+			return
+		}
+	}
+	if remote := a.remoteActive(); remote != nil {
+		go func() { _, _ = remote.action("settings") }()
+		return
+	}
 	if a.platformWindows[a.platformID][pluginapi.SettingsWindow].Root == nil {
 		return
 	}

@@ -4,15 +4,25 @@ import (
 	"context"
 
 	"github.com/egoist/mygo"
-
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 // setMenu gives the app its menu bar, in Chinese and named as the app
 // is, with the settings in the app menu and the player's controls in a
 // menu of their own.
 func (a *app) setMenu() {
-	mygo.App.SetMenu(a.platformMenu(pluginapi.ApplicationMenu))
+	menu := a.platformMenu(pluginapi.ApplicationMenu)
+	if a.hasPluginManager() {
+		var items []*mygo.MenuItem
+		if menu != nil {
+			items = menu.Items()
+		}
+		items = append(items, &mygo.MenuItem{Label: "插件", Submenu: []*mygo.MenuItem{
+			{Label: "插件管理…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openPluginManager() }},
+		}})
+		menu = mygo.NewMenu(items)
+	}
+	mygo.App.SetMenu(menu)
 }
 
 func (a *app) platformMenu(id pluginapi.MenuID) *mygo.Menu {

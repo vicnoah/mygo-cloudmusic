@@ -17,17 +17,18 @@ import (
 var ErrUnavailable = errors.New("mpv: library not found or cannot be loaded")
 
 type cFuncs struct {
-	create            func() uintptr
-	initialize        func(handle uintptr) int
-	terminateDestroy  func(handle uintptr)
-	command           func(handle uintptr, cmd **byte) int
-	commandString     func(handle uintptr, cmd *byte) int
-	setOptionString   func(handle uintptr, name, value *byte) int
-	setPropertyString func(handle uintptr, name, value *byte) int
-	getPropertyString func(handle uintptr, name *byte) *byte
-	free              func(ptr unsafe.Pointer)
-	waitEvent         func(handle uintptr, timeout float64) *cEvent
-	wakeup            func(handle uintptr)
+	clientAPIVersion   func() uint32
+	create             func() uintptr
+	initialize         func(handle uintptr) int
+	terminateDestroy   func(handle uintptr)
+	command            func(handle uintptr, cmd **byte) int
+	commandString      func(handle uintptr, cmd *byte) int
+	setOptionString    func(handle uintptr, name, value *byte) int
+	setPropertyString  func(handle uintptr, name, value *byte) int
+	getPropertyString  func(handle uintptr, name *byte) *byte
+	free               func(ptr unsafe.Pointer)
+	waitEvent          func(handle uintptr, timeout float64) *cEvent
+	wakeup             func(handle uintptr)
 	requestLogMessages func(handle uintptr, minLevel *byte) int
 }
 
@@ -133,18 +134,19 @@ func loadLibraryAt(path string) error {
 	}
 
 	symbols := map[string]any{
-		"mpv_create":                &mpvLib.create,
-		"mpv_initialize":            &mpvLib.initialize,
-		"mpv_terminate_destroy":     &mpvLib.terminateDestroy,
-		"mpv_command":               &mpvLib.command,
-		"mpv_command_string":        &mpvLib.commandString,
-		"mpv_set_option_string":     &mpvLib.setOptionString,
-		"mpv_set_property_string":   &mpvLib.setPropertyString,
-		"mpv_get_property_string":   &mpvLib.getPropertyString,
-		"mpv_free":                  &mpvLib.free,
-		"mpv_wait_event":            &mpvLib.waitEvent,
-		"mpv_wakeup":                &mpvLib.wakeup,
-		"mpv_request_log_messages":  &mpvLib.requestLogMessages,
+		"mpv_client_api_version":   &mpvLib.clientAPIVersion,
+		"mpv_create":               &mpvLib.create,
+		"mpv_initialize":           &mpvLib.initialize,
+		"mpv_terminate_destroy":    &mpvLib.terminateDestroy,
+		"mpv_command":              &mpvLib.command,
+		"mpv_command_string":       &mpvLib.commandString,
+		"mpv_set_option_string":    &mpvLib.setOptionString,
+		"mpv_set_property_string":  &mpvLib.setPropertyString,
+		"mpv_get_property_string":  &mpvLib.getPropertyString,
+		"mpv_free":                 &mpvLib.free,
+		"mpv_wait_event":           &mpvLib.waitEvent,
+		"mpv_wakeup":               &mpvLib.wakeup,
+		"mpv_request_log_messages": &mpvLib.requestLogMessages,
 	}
 
 	for symName, fnPtr := range symbols {
@@ -160,9 +162,9 @@ func loadLibraryAt(path string) error {
 
 // Instance wraps a running libmpv instance handle.
 type Instance struct {
-	mu     sync.Mutex
-	handle uintptr
-	closed bool
+	mu      sync.Mutex
+	handle  uintptr
+	eventMu sync.Mutex // protects an event read until its native data has been copied
 }
 
 // NewInstance creates and configures a new MPV instance for audio playback.
@@ -219,15 +221,18 @@ func NewInstance(opts ...map[string]string) (*Instance, error) {
 // Close destroys the MPV instance.
 func (inst *Instance) Close() {
 	inst.mu.Lock()
-	defer inst.mu.Unlock()
-
-	if inst.closed || inst.handle == 0 {
+	h := inst.handle
+	if h == 0 {
+		inst.mu.Unlock()
 		return
 	}
-	inst.closed = true
-	mpvLib.wakeup(inst.handle)
-	mpvLib.terminateDestroy(inst.handle)
 	inst.handle = 0
+	mpvLib.wakeup(h)
+	inst.mu.Unlock()
+
+	inst.eventMu.Lock()
+	defer inst.eventMu.Unlock()
+	mpvLib.terminateDestroy(h)
 }
 
 // SetOption sets an MPV option before or after initialization.
@@ -313,6 +318,8 @@ func (inst *Instance) CommandString(cmd string) int {
 
 // WaitEvent blocks for up to timeout seconds waiting for an MPV event.
 func (inst *Instance) WaitEvent(timeout float64) (eventID uint32, errCode int32, endReason EndFileReason) {
+	inst.eventMu.Lock()
+	defer inst.eventMu.Unlock()
 	inst.mu.Lock()
 	h := inst.handle
 	inst.mu.Unlock()

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 	"waygu-music/internal/player/dlna"
-	"waygu-music/internal/pluginapi"
 )
 
 type castPlayback struct {
@@ -114,7 +114,7 @@ func (p *Player) loadCast(parent context.Context, track pluginapi.Track, level s
 	p.loading, p.err = true, ""
 	cast.preparing = "正在准备投播…"
 	p.sync()
-	go func() {
+	p.castWorkers.Go(func() {
 		media, retryable, err := p.prepareCast(ctx, track, level, device, fallback, func() {
 			p.post(func() {
 				if p.cast == cast && ctx.Err() == nil && p.loading {
@@ -159,7 +159,7 @@ func (p *Player) loadCast(parent context.Context, track pluginapi.Track, level s
 			}
 			p.sync()
 		})
-	}()
+	})
 }
 
 // LoadingText describes which part of casting the player is waiting for.
@@ -184,7 +184,7 @@ func castMetadata(id string, t pluginapi.Track, media playbackSource) dlna.Track
 	return dlna.TrackMeta{
 		ID: id, Title: t.Name, Artist: t.ArtistNames(), Album: t.Album.Name,
 		StreamURL: info.URL, LocalFile: media.localFile, Format: info.Type,
-		Duration: t.Length(), Size: info.Size, Bitrate: bitrate, Header: info.Header,
+		Duration: t.Length(), Size: info.Size, Bitrate: bitrate, Header: info.Header, Renew: info.Renew,
 	}
 }
 
@@ -238,7 +238,17 @@ func (p *Player) providerCastSource(ctx context.Context, t *pluginapi.Track, for
 	defer done()
 	info, segments, err := p.ResolveCastSource(request, t, format)
 	if segments != nil {
-		defer segments.Close()
+		defer func() {
+			segments.Close()
+			if _, waits := segments.(interface{ Released() <-chan struct{} }); waits {
+				// The local MP3 can be used while the provider frees its session.
+				p.castWorkers.Go(func() {
+					ctx, cancel := context.WithTimeout(context.Background(), playbackReleaseTimeout)
+					defer cancel()
+					waitForSegmentRelease(ctx, segments)
+				})
+			}
+		}()
 	}
 	if err != nil || info == nil {
 		return playbackSource{}, err
@@ -282,7 +292,7 @@ func (p *Player) providerCastSource(ctx context.Context, t *pluginapi.Track, for
 
 func stageCastMP3(ctx, request context.Context, info *pluginapi.Stream, proxy *dlna.Proxy) (playbackSource, error) {
 	return withCastFile(ctx, "mp3", func(f *os.File) (playbackSource, error) {
-		size, staged, err := proxy.PrepareMP3(request, dlna.StreamSource{RemoteURL: info.URL, Header: info.Header}, f)
+		size, staged, err := proxy.PrepareMP3(request, dlna.StreamSource{RemoteURL: info.URL, Header: info.Header, Renew: info.Renew}, f)
 		if err != nil {
 			return playbackSource{}, err
 		}
@@ -292,7 +302,7 @@ func stageCastMP3(ctx, request context.Context, info *pluginapi.Stream, proxy *d
 		}
 		media := playbackSource{info: &result}
 		if staged {
-			result.URL, result.Header, result.VerifyCachedContent = "", nil, nil
+			result.URL, result.Header, result.Renew, result.VerifyCachedContent = "", nil, nil, nil
 			media.localFile = f.Name()
 		}
 		return media, nil

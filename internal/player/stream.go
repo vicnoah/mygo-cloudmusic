@@ -16,8 +16,8 @@ import (
 	"github.com/egoist/mygo/audio"
 	gomp3 "github.com/hajimehoshi/go-mp3"
 
-	"waygu-music/internal/pluginapi"
-	"waygu-music/internal/pluginapi/network"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi/network"
 )
 
 // streamClient fetches audio streams. A NAS on the LAN answers over HTTPS
@@ -59,13 +59,12 @@ type download struct {
 // startDownload fetches url, of size bytes if known, into part, a file
 // that keep keeps once it has all come in: or into memory, without one.
 func startDownload(url string, size int64, part *os.File, keep func(string, int64) (string, bool)) *download {
-	return startDownloadWith(url, nil, size, part, keep)
+	return startDownloadWith(context.Background(), &pluginapi.Stream{URL: url, Size: size}, part, keep)
 }
 
-// startDownloadWith adds per-request headers for a platform stream whose
-// signed media URL must be refreshed for each request.
-func startDownloadWith(url string, header func() http.Header, size int64, part *os.File, keep func(string, int64) (string, bool)) *download {
-	ctx, cancel := context.WithCancel(context.Background())
+func startDownloadWith(parent context.Context, stream *pluginapi.Stream, part *os.File, keep func(string, int64) (string, bool)) *download {
+	ctx, cancel := context.WithCancel(parent)
+	size := stream.Size
 	d := &download{size: size, cancel: cancel, users: 2}
 	d.cond.L = &d.mu
 	switch {
@@ -74,7 +73,8 @@ func startDownloadWith(url string, header func() http.Header, size int64, part *
 	case size > 0:
 		d.data = make([]byte, 0, prealloc(size))
 	}
-	go d.run(ctx, url, header)
+	source := network.NewMediaSource(stream.URL, stream.Header, stream.Renew, network.BrowserUserAgent)
+	go d.run(ctx, source)
 	return d
 }
 
@@ -100,26 +100,16 @@ func opened(f *os.File, size int64) *download {
 	return d
 }
 
-func (d *download) run(ctx context.Context, url string, header func() http.Header) {
+func (d *download) run(ctx context.Context, source *network.MediaSource) {
 	defer d.release()
+	defer d.cancel()
 	finish := func(err error) {
 		d.mu.Lock()
 		d.done, d.err = true, err
 		d.cond.Broadcast()
 		d.mu.Unlock()
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		finish(err)
-		return
-	}
-	req.Header.Set("User-Agent", network.BrowserUserAgent)
-	if header != nil {
-		for k, v := range header() {
-			req.Header[k] = v
-		}
-	}
-	res, err := streamClient.Do(req)
+	res, err := source.Open(ctx, streamClient, http.MethodGet, nil)
 	if err != nil {
 		finish(err)
 		return
@@ -262,10 +252,24 @@ func (d *download) Progress() float64 {
 // waitFor waits until n bytes are in, or the download ended, and returns
 // how many there are.
 func (d *download) waitFor(n int64) int64 {
+	return (downloadView{download: d, ctx: context.Background()}).waitFor(n)
+}
+
+// A view lets an independent decoder stop waiting without canceling the
+// download used for playback.
+type downloadView struct {
+	*download
+	ctx context.Context
+}
+
+func (d downloadView) waitFor(n int64) int64 {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for d.n < n && !d.done {
+	for d.n < n && !d.done && d.ctx.Err() == nil {
 		d.cond.Wait()
+	}
+	if d.ctx.Err() != nil {
+		return 0
 	}
 	return d.n
 }
@@ -312,7 +316,7 @@ func (w *window) at(off int64, n int) []byte {
 // It is no io.Seeker, so go-mp3 does not read the whole file up front to
 // find where each frame starts.
 type downloadReader struct {
-	d   *download
+	d   downloadView
 	pos int64
 }
 
@@ -320,8 +324,11 @@ func (r *downloadReader) Read(p []byte) (int, error) {
 	d := r.d
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for d.n <= r.pos && !d.done {
+	for d.n <= r.pos && !d.done && d.ctx.Err() == nil {
 		d.cond.Wait()
+	}
+	if err := d.ctx.Err(); err != nil {
+		return 0, err
 	}
 	if d.n <= r.pos {
 		if d.err != nil {
@@ -349,6 +356,10 @@ type stream interface {
 // openStream opens the song dl fetches, MP3 or FLAC, as its first bytes
 // say. An MP3 says nothing of its length: durationMs is it.
 func openStream(dl *download, durationMs int64) (stream, error) {
+	return openDownloadView(downloadView{download: dl, ctx: context.Background()}, durationMs)
+}
+
+func openDownloadView(dl downloadView, durationMs int64) (stream, error) {
 	off := id3Size(dl)
 	if dl.waitFor(off+4) >= off+4 && string(dl.peek(off, 4)) == "fLaC" {
 		return openFLACStream(dl)
@@ -359,12 +370,29 @@ func openStream(dl *download, durationMs int64) (stream, error) {
 // openShared opens a second stream of what dl fetches, for decoding apart
 // from what plays: it measures no spectrum, and closing it lets the song
 // go for it alone, leaving the download to the stream that plays.
-func openShared(dl *download, durationMs int64) (stream, error) {
+func openShared(playback, activation context.Context, dl *download, durationMs int64) (*sharedAudio, error) {
 	if !dl.share() {
 		return nil, errors.New("player: the song is gone")
 	}
-	s, err := openStream(dl, durationMs)
+	ctx, cancel := context.WithCancel(playback)
+	stopActivation := context.AfterFunc(activation, cancel)
+	stopWake := context.AfterFunc(ctx, func() {
+		dl.mu.Lock()
+		dl.cond.Broadcast()
+		dl.mu.Unlock()
+	})
+	cleanup := func() {
+		cancel()
+		stopActivation()
+	}
+	if activation.Err() != nil {
+		cancel()
+	}
+	s, err := openDownloadView(downloadView{download: dl, ctx: ctx}, durationMs)
+	err = cmp.Or(activation.Err(), ctx.Err(), err)
 	if err != nil {
+		cleanup()
+		stopWake()
 		dl.release()
 		return nil, err
 	}
@@ -374,14 +402,56 @@ func openShared(dl *download, durationMs int64) (stream, error) {
 	case *flacStream:
 		s.spec, s.drop = nil, dl.release
 	}
-	return s, nil
+	handle := &sharedAudio{stream: s, ctx: ctx, activation: activation, cancel: cleanup}
+	context.AfterFunc(ctx, func() { handle.Close() })
+	return handle, nil
+}
+
+// sharedAudio serializes decoder calls. Cancellation wakes a blocked read
+// before Close waits for the decoder, and prevents buffered PCM escaping.
+type sharedAudio struct {
+	stream
+	ctx, activation context.Context
+	cancel          func()
+	mu              sync.Mutex
+}
+
+func (a *sharedAudio) Read(dst []float32) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := cmp.Or(a.activation.Err(), a.ctx.Err()); err != nil {
+		return 0, err
+	}
+	n, err := a.stream.Read(dst)
+	if canceled := cmp.Or(a.activation.Err(), a.ctx.Err()); canceled != nil {
+		clear(dst[:n])
+		return 0, canceled
+	}
+	return n, err
+}
+
+func (a *sharedAudio) SetPosition(frame int64) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := cmp.Or(a.activation.Err(), a.ctx.Err()); err != nil {
+		return err
+	}
+	err := a.stream.SetPosition(frame)
+	return cmp.Or(a.activation.Err(), a.ctx.Err(), err)
+}
+
+func (a *sharedAudio) Close() error {
+	a.cancel()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stream.Close()
 }
 
 // mp3Stream decodes a download for package audio, seeking by bytes: songs
 // are encoded at a constant bit rate, so time and bytes are in proportion.
 // It also measures the spectrum of what it decodes, for the visualizers.
 type mp3Stream struct {
-	dl      *download
+	dl      downloadView
 	dec     *gomp3.Decoder
 	rate    int
 	frames  int64 // the song's length in frames, from its duration
@@ -394,7 +464,7 @@ type mp3Stream struct {
 	closeMu sync.Once
 }
 
-func openMP3Stream(dl *download, durationMs int64) (*mp3Stream, error) {
+func openMP3Stream(dl downloadView, durationMs int64) (*mp3Stream, error) {
 	s := &mp3Stream{dl: dl, drop: dl.Close}
 	dec, err := gomp3.NewDecoder(&downloadReader{d: dl})
 	if err != nil {
@@ -408,7 +478,7 @@ func openMP3Stream(dl *download, durationMs int64) (*mp3Stream, error) {
 }
 
 // id3Size returns the length of the ID3v2 tag at the start of the file.
-func id3Size(dl *download) int64 {
+func id3Size(dl downloadView) int64 {
 	dl.waitFor(10)
 	b := dl.peek(0, 10)
 	if len(b) < 10 || string(b[:3]) != "ID3" {
@@ -481,7 +551,7 @@ func (s *mp3Stream) SetPosition(frame int64) error {
 	return nil
 }
 
-func (s *mp3Stream) source() (*download, *spectrum) { return s.dl, s.spec }
+func (s *mp3Stream) source() (*download, *spectrum) { return s.dl.download, s.spec }
 
 func (s *mp3Stream) Close() error {
 	s.closeMu.Do(s.drop)
@@ -491,8 +561,8 @@ func (s *mp3Stream) Close() error {
 // findFrame returns the start of the first MP3 frame at or after off whose
 // header the next frame's confirms, so that bytes that only look like one
 // within the audio do not count.
-func findFrame(dl *download, off int64) int64 {
-	w := window{dl: dl}
+func findFrame(dl downloadView, off int64) int64 {
+	w := window{dl: dl.download}
 	for tries := 0; tries < 64<<10; tries++ {
 		have := dl.waitFor(off + 4)
 		if have < off+4 {

@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 // Identical references from different instances keep their own audio and decoder paths.

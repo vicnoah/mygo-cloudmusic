@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"waygu-music/internal/pluginapi"
-	"waygu-music/internal/pluginapi/network"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi/network"
 )
 
 type testStreamAdapter struct {

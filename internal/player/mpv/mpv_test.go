@@ -6,8 +6,44 @@ import (
 	"testing"
 	"time"
 
-	"waygu-music/internal/pluginapi/eq"
+	"github.com/waygu-music-plugin/sdk/pluginapi/eq"
 )
+
+// A nonzero start used to be sent as a seek before the newly opened file could accept it.
+func TestMPVLoadsAtRequestedPosition(t *testing.T) {
+	if !Ready() {
+		t.Skip("mpv not available")
+	}
+	engine, err := NewEngine(Config{NullAO: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	restarted := make(chan struct{}, 1)
+	engine.OnPlaybackRestart(func() {
+		select {
+		case restarted <- struct{}{}:
+		default:
+		}
+	})
+	path, err := filepath.Abs("../testdata/seek.flac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const start = 2 * time.Second
+	if err := engine.Play(path, nil, start); err != nil {
+		t.Fatal(err)
+	}
+	engine.Pause()
+	select {
+	case <-restarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("mpv did not finish opening the paused track")
+	}
+	if pos := engine.Position(); (pos - start).Abs() > 250*time.Millisecond {
+		t.Fatalf("mpv started at %s, want %s", pos, start)
+	}
+}
 
 // Tests metadata and path resolution for libmpv assets across platforms.
 func TestMPVMeta(t *testing.T) {

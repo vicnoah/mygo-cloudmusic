@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,9 +12,82 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/audio"
-
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/bridge"
+	"github.com/waygu-music-plugin/sdk/platformrpc"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
+
+// A shared Subsonic source used to be assigned to whichever server the listener switched to.
+func TestLegacySubsonicSessionKeepsOriginalProfile(t *testing.T) {
+	dir := t.TempDir()
+	mygo.App.SetPath(mygo.PathUserData, dir)
+	t.Cleanup(func() { mygo.App.SetPath(mygo.PathUserData, "") })
+	old := []byte(`{"queue":[{"id":7,"name":"Saved on Jellyfin","dt":5000,"src":"subsonic","ref":"same-on-two-servers"}],"order":[0],"at":0,"position":1200}`)
+	path := filepath.Join(dir, "session.json")
+	if err := os.WriteFile(path, old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"platform":"jellyfin"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	launch := func(entries ...pluginapi.ID) *app {
+		t.Helper()
+		a := newTestApp()
+		for _, id := range entries {
+			a.platformRegistrations = append(a.platformRegistrations, testRegistration(id, func(pluginapi.Startup) pluginapi.Adapter {
+				return testStreamAdapter{id: id}
+			}))
+		}
+		a.settings = loadSettings(a.platformRegistrations...)
+		if !a.initPlatformState() {
+			t.Fatal("no platform activated")
+		}
+		a.activatePlatformView()
+		t.Cleanup(func() {
+			a.deactivatePlatformView(false)
+			_ = a.pl.DLNA().Close()
+		})
+		return a
+	}
+	load := func(a *app) (pluginapi.PlaybackSession, bool) {
+		return (playbackContinuity{a: a, ctx: a.platformContext}).LoadSession()
+	}
+	reject := func(a *app) {
+		t.Helper()
+		if session, ok := load(a); ok {
+			t.Fatalf("%s received Jellyfin's legacy session: %+v", a.platformID, session)
+		}
+	}
+
+	fallback := launch("fnmusic")
+	reject(fallback)
+	fallback.settings.Appearance = "dark"
+	if err := fallback.settings.save(); err != nil {
+		t.Fatal(err)
+	}
+	a := launch("fnmusic", "navidrome", "jellyfin", "subsonic")
+	a.setPlatform("navidrome")
+	reject(a)
+	a = launch("fnmusic", "navidrome", "jellyfin", "subsonic")
+	reject(a)
+	a.setPlatform("subsonic")
+	reject(a)
+	a.setPlatform("jellyfin")
+	session, ok := load(a)
+	if !ok || len(session.Queue) != 1 || session.Queue[0].Source != "jellyfin" || session.Position != 1200 {
+		t.Fatalf("Jellyfin lost its original paused session: %+v", session)
+	}
+	if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, old) {
+		t.Fatalf("the legacy session needed by older releases was changed: %v", err)
+	}
+	replacement := bytes.Replace(old, []byte("Saved on Jellyfin"), []byte("Unattributed replacement"), 1)
+	if err := os.WriteFile(path, replacement, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a = launch("fnmusic", "navidrome", "jellyfin", "subsonic")
+	reject(a)
+}
 
 // A saved queue is offered once to its owner and restored paused, including old tracks without a source.
 func TestLegacySessionOfferedToActiveOwner(t *testing.T) {
@@ -66,6 +140,36 @@ func TestLegacySessionOfferedToActiveOwner(t *testing.T) {
 	}
 }
 
+// Preparing or rejecting a remote plugin preserves playback and revokes any queued writes from the candidate.
+func TestRejectedPluginCandidateCannotReplacePlayback(t *testing.T) {
+	a := newTestApp()
+	t.Cleanup(func() { _ = a.pl.DLNA().Close() })
+	a.platformRegistrations = []pluginapi.Registration{testRegistration("first", nil)}
+	a.initPlatformState()
+	a.activatePlatformView()
+	defer a.deactivatePlatformView(false)
+	a.pl.Cue([]pluginapi.Track{{ID: 9, Name: "Original", Duration: 30000}})
+	local := (platformHost{a: a, id: a.platformID}).Player()
+	scope := a.pluginActivations.Prepare("remote")
+	reverse := pluginReverse{app: a, connection: "remote"}
+	request := PluginHostCall{Scope: scope, Action: "resume-pause"}
+	var reply PluginHostReply
+	if got := bridge.Failure("", reverse.apply(request, &reply)); got.Code != "not-active" {
+		t.Fatalf("candidate command = %+v", got)
+	}
+	a.pluginActivations.Revoke(scope)
+	if a.pluginActivations.Commit(scope) {
+		t.Fatal("a rejected candidate was committed")
+	}
+	if got := bridge.Failure("", reverse.apply(request, &reply)); got.Code != "stale-activation" {
+		t.Fatalf("late command = %+v", got)
+	}
+	local.SetShuffle(true)
+	if a.platformScope == (platformrpc.Scope{}) || a.pl.Current().ID != 9 || a.pl.Playing() || !a.pl.Shuffle() {
+		t.Fatal("candidate changed the original playback or revoked its controls")
+	}
+}
+
 // A delayed restore or radio request cannot change playback after the same plugin is opened again.
 func TestPlaybackContinuityExpiresWhenPluginReturns(t *testing.T) {
 	dir := t.TempDir()
@@ -79,7 +183,7 @@ func TestPlaybackContinuityExpiresWhenPluginReturns(t *testing.T) {
 			start.RegisterLifecycle(pluginapi.Lifecycle{Activate: func(_ context.Context, active pluginapi.PlaybackContinuity) {
 				continuity = active
 			}})
-			return testPluginAdapter{}
+			return testStreamAdapter{id: "first"}
 		}),
 		testRegistration("second", nil),
 	}
@@ -100,7 +204,8 @@ func TestPlaybackContinuityExpiresWhenPluginReturns(t *testing.T) {
 	a.setPlatform("first")
 	a.pl.Cue([]pluginapi.Track{{ID: 77}})
 	saved := pluginapi.PlaybackSession{
-		Queue: []pluginapi.Track{{ID: 39, Duration: 20000}}, Order: []int{0}, Position: 2500,
+		Queue: []pluginapi.Track{{ID: 39, Duration: 20000, PlatformTrack: pluginapi.PlatformTrack{Source: "first"}}},
+		Order: []int{0}, Position: 2500,
 	}
 	previous.Restore(saved)
 	previous.AttachRadio("old-radio", nil)
@@ -120,18 +225,11 @@ func TestPlaybackContinuityExpiresWhenPluginReturns(t *testing.T) {
 	}
 }
 
-// Switching plugins clears old playback and only the new activation can save its queue.
-func TestPlatformSwitchDiscardsSavedQueue(t *testing.T) {
+// Switching plugins clears active playback, keeps each plugin's saved queue, and revokes scheduled writes.
+func TestPlatformSwitchKeepsSavedQueuesSeparate(t *testing.T) {
 	dir := t.TempDir()
 	mygo.App.SetPath(mygo.PathUserData, dir)
 	defer mygo.App.SetPath(mygo.PathUserData, "")
-	names := []string{"session.json", "session.json.part"}
-	for _, name := range names {
-		payload := []byte(`{"queue":[{"id":7,"name":"宝船","dt":200000}],"order":[0],"at":0,"position":48000}`)
-		if err := os.WriteFile(filepath.Join(dir, name), payload, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
 	var scheduled []func()
 	after := sessionAfter
 	defer func() { sessionAfter = after }()
@@ -147,17 +245,23 @@ func TestPlatformSwitchDiscardsSavedQueue(t *testing.T) {
 	if len(a.pl.Queue()) != 0 || a.pl.Current() != nil {
 		t.Fatal("the newly active plugin retained the previous playback")
 	}
-	for _, name := range names {
-		if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("%s still present after switching platform: %v", name, err)
-		}
+	firstPath, err := platformSessionPath("first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(firstPath)
+	if err != nil {
+		t.Fatal(err)
 	}
 	a.pl.Cue([]pluginapi.Track{{ID: 9, Duration: 200000}})
 	a.keepSession()
 	if len(scheduled) != 2 {
 		t.Fatalf("expected each activation to schedule a save, got %d callbacks", len(scheduled))
 	}
-	path := filepath.Join(dir, "session.json")
+	path, err := platformSessionPath("second")
+	if err != nil {
+		t.Fatal(err)
+	}
 	scheduled[0]()
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the prior activation wrote a session after switching: %v", err)
@@ -173,6 +277,9 @@ func TestPlatformSwitchDiscardsSavedQueue(t *testing.T) {
 	}
 	if len(session.Queue) != 1 || session.Queue[0].ID != 9 {
 		t.Fatalf("saved queue did not match the newly active plugin: %+v", session.Queue)
+	}
+	if err := json.Unmarshal(first, &session); err != nil || len(session.Queue) != 1 || session.Queue[0].ID != 7 {
+		t.Fatalf("previous plugin lost its saved queue: %+v, %v", session.Queue, err)
 	}
 }
 

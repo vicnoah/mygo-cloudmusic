@@ -3,42 +3,39 @@ package app
 import (
 	"context"
 	"errors"
-	"os"
 	"runtime"
-	"time"
+	"sync"
+	"sync/atomic"
 
 	"github.com/egoist/mygo"
+	"github.com/waygu-music-plugin/sdk/desktop"
+	appplatform "github.com/waygu-music-plugin/sdk/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi/artwork"
 
 	"waygu-music/internal/player"
-	appplatform "waygu-music/internal/pluginapi"
 )
 
 // app owns the native windows and the services shared by platform plugins.
 type app struct {
-	win, settingsWin, desktopLyricsWin              *mygo.Window
-	desktopLyricsLocked, desktopLyricsPointerInside bool
-	desktopLyricsShowTranslation                    bool
-	desktopLyricsFontSize                           float32
-	desktopLyricsColor                              int
-	desktopLyricsPoll                               *time.Timer
-	desktopLyricsOffDisplays                        func()
-	desktopLyricsIgnoresMouse                       bool
-	tray                                            *mygo.Tray
-	art                                             *artCache
-	pl                                              *player.Player
-	toast                                           string
-	volume                                          float64
-	dlnaScanning                                    bool
-	mpvDownloading                                  bool
-	mpvDone, mpvTotal                               int64
-	mpvCancel                                       context.CancelFunc
-	quitting                                        bool
+	win, settingsWin  *mygo.Window
+	pluginsWin        *mygo.Window
+	desktopLyrics     desktop.LyricsWindow
+	tray              *mygo.Tray
+	art               *artwork.Cache
+	pl                *player.Player
+	toast             string
+	volume            float64
+	desktopTasks      desktopTasks
+	mpvDone, mpvTotal int64
+	mpvCancel         context.CancelFunc
+	cacheMeasure      uint64
+	cacheLimitRev     atomic.Uint64
+	cacheLimitMu      sync.Mutex
+	quitting          bool
 
-	settings     settings
-	cacheUsed    int64
-	updates      bool
-	devClicks    int
-	devClickTime time.Time
+	settings  settings
+	cacheUsed int64
+	updates   bool
 
 	appPlatformState
 
@@ -56,6 +53,9 @@ func (a *app) post(fn func()) {
 	a.win.Update(func() {
 		fn()
 		a.redraw()
+		if a.settingsWin != nil {
+			a.settingsWin.Invalidate()
+		}
 	})
 }
 
@@ -63,8 +63,9 @@ func (a *app) redraw() {
 	if a.win != nil {
 		a.win.Invalidate()
 	}
-	if a.desktopLyricsWin != nil {
-		a.desktopLyricsWin.Invalidate()
+	a.desktopLyrics.Invalidate()
+	if a.pluginsWin != nil {
+		a.pluginsWin.Invalidate()
 	}
 	for _, window := range a.mountedWindows {
 		if window.updated != nil {
@@ -75,6 +76,10 @@ func (a *app) redraw() {
 }
 
 func (a *app) showMain() {
+	if remote := a.remoteActive(); remote != nil {
+		go func() { _, _ = remote.action("show") }()
+		return
+	}
 	if a.win != nil {
 		if a.win.IsMinimized() {
 			a.win.Restore()
@@ -88,6 +93,10 @@ func (a *app) showMain() {
 
 // Run runs the app until it quits.
 func Run(registrations []appplatform.Registration) error {
+	return run(registrations, nil)
+}
+
+func run(registrations []appplatform.Registration, local map[appplatform.ID]*localPlugin) error {
 	// Before the lock and anything that reads them: the app's folders are
 	// named in ASCII, though it calls itself 肥牛音乐.
 	useDataPaths()
@@ -97,24 +106,25 @@ func Run(registrations []appplatform.Registration) error {
 	if !mygo.App.RequestSingleInstanceLock() {
 		return nil
 	}
-	a := &app{cacheUsed: -1, appPlatformState: appPlatformState{platformRegistrations: registrations}}
+	a := &app{cacheUsed: -1, appPlatformState: appPlatformState{platformRegistrations: registrations, localPlugins: local}}
 	var startupErr error
 	moveOldData()
 	a.useUpdater()
 	mygo.App.WhenReady(func() {
 		a.settings = loadSettings(a.platformRegistrations...)
-		if os.Getenv("NM_SHOTS") != "" {
-			a.settings.path = ""
-		}
+		a.loadPluginRegistry()
 		a.settings.applyAppearance()
 		// Before the window: on Windows it lays out its content as it is
 		// made, and the view asks the player what plays.
-		a.art = newArtCache(a.post)
+		a.art = artwork.NewCache(a.post)
 		a.pl = player.New(a.post)
 		a.pl.Cache = newSongCache(a.settings.CacheMB)
 		a.syncMPVSettings()
 		a.pl.Changed = func() {
 			a.keepSession()
+			if remote := a.remoteActive(); remote != nil {
+				remote.publishPlayback(a, false)
+			}
 			if changed := a.platformLifecycles[a.platformID].PlaybackChanged; changed != nil {
 				changed()
 			}
@@ -132,6 +142,7 @@ func Run(registrations []appplatform.Registration) error {
 		a.activatePlatformView()
 		options := a.windowOptions(appplatform.MainWindow)
 		a.win = mygo.NewWindow(options)
+		a.measureCache()
 		a.syncPlatformWindows()
 		a.setMenu()
 		a.mountPlatformWindows()
@@ -147,6 +158,9 @@ func Run(registrations []appplatform.Registration) error {
 			}
 		})
 		a.applyTray()
+		if id := appplatform.ID(a.settings.Platform); local[id] != nil && local[id].program.Path != "" {
+			a.startLocalPlugin(id)
+		}
 		// Closing the window hides it: music plays on, and the Dock icon
 		// or the tray's brings it back. A Linux desktop without a tray
 		// has neither, so there closing it quits.
@@ -167,9 +181,14 @@ func Run(registrations []appplatform.Registration) error {
 		if startupErr != nil {
 			return
 		}
+		if a.mpvCancel != nil {
+			a.mpvCancel()
+		}
 		a.deactivatePlatformView(false)
+		a.cancelLocalRequest()
+		a.revokeLocalPlugin()
 		a.unmountPlatformWindows()
-		a.destroyDesktopLyrics()
+		a.desktopLyrics.Destroy()
 		a.settings.Volume = a.volume
 		a.settings.save()
 		a.saveSession()
@@ -186,36 +205,14 @@ func Run(registrations []appplatform.Registration) error {
 	// above, as the shortcut's while the window hides in the tray.
 	mygo.App.OnActivate(func(bool) { a.showMain() })
 	mygo.App.OnSecondInstance(func([]string, string) { a.showMain() })
-	if err := mygo.App.Run(); err != nil {
+	err := mygo.App.Run()
+	if a.pl != nil {
+		a.pl.Close()
+	}
+	// Reap both the active process and any launch canceled during shutdown.
+	a.pluginWorkers.Wait()
+	if err != nil {
 		return err
 	}
 	return startupErr
-}
-
-func (a *app) onVersionClicked() {
-	now := time.Now()
-	if now.Sub(a.devClickTime) > 3*time.Second {
-		a.devClicks = 0
-	}
-	a.devClickTime = now
-	a.devClicks++
-	if a.devClicks >= 5 {
-		a.devClicks = 0
-		a.settings.DeveloperMode = !a.settings.DeveloperMode
-		a.settings.save()
-		if a.settings.DeveloperMode {
-			a.toast = "已开启开发者模式"
-		} else {
-			a.toast = "已关闭开发者模式"
-		}
-		a.redraw()
-		if a.settingsWin != nil {
-			a.settingsWin.Invalidate()
-		}
-	} else if a.devClicks >= 3 {
-		a.redraw()
-		if a.settingsWin != nil {
-			a.settingsWin.Invalidate()
-		}
-	}
 }

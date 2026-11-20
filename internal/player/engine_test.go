@@ -2,15 +2,18 @@ package player
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 	"waygu-music/internal/player/dlna"
 	"waygu-music/internal/player/mpv"
-	"waygu-music/internal/pluginapi"
 )
 
 // Tests switching between built-in, MPV, and DLNA playback routing.
@@ -186,10 +189,10 @@ func TestPlayerMPVWithProxyHeaders(t *testing.T) {
 		t.Skip("mpv not available")
 	}
 
-	headerReceived := false
+	var headerReceived atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authx") == "test-auth-token" {
-			headerReceived = true
+			headerReceived.Store(true)
 		}
 		// Return minimal dummy bytes
 		w.Header().Set("Content-Type", "text/html; charset=utf-8") // simulate Feiniu's bad content-type
@@ -228,7 +231,7 @@ func TestPlayerMPVWithProxyHeaders(t *testing.T) {
 	}
 
 	start := time.Now()
-	for !headerReceived && time.Since(start) < 2*time.Second {
+	for !headerReceived.Load() && time.Since(start) < 2*time.Second {
 		select {
 		case fn := <-ch:
 			fn()
@@ -236,8 +239,53 @@ func TestPlayerMPVWithProxyHeaders(t *testing.T) {
 		}
 	}
 
-	if !headerReceived {
+	if !headerReceived.Load() {
 		t.Error("expected custom Authx header to be received by the server via proxy")
+	}
+}
+
+// The MPV loopback proxy reads the current provider header for each range request.
+func TestMPVProxyUsesCurrentMediaHeader(t *testing.T) {
+	var token atomic.Value
+	token.Store("first")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") != "bytes=3-5" {
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = io.WriteString(w, r.Header.Get("Authorization"))
+	}))
+	defer server.Close()
+	ctrl, err := dlna.NewController(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	p := Player{dlnaCtrl: ctrl}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	url := p.mpvURL(ctx, &pluginapi.Track{ID: 303}, playbackSource{info: &pluginapi.Stream{
+		URL: server.URL, Type: "mp3", Header: func() http.Header {
+			return http.Header{"Authorization": {token.Load().(string)}}
+		},
+	}})
+	for _, want := range []string{"first", "next"} {
+		token.Store(want)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Range", "bytes=3-5")
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil || response.StatusCode != http.StatusPartialContent || string(got) != want {
+			t.Fatalf("range used header %q with status %d and error %v, want %q", got, response.StatusCode, err, want)
+		}
 	}
 }
 
@@ -320,6 +368,59 @@ func TestMPVProgressAndReady(t *testing.T) {
 	if v := p.mpvOut.Volume(); v != 1.0 {
 		t.Errorf("expected MPV volume 1.0, got %v", v)
 	}
+}
+
+// A paused MPV seek publishes the settled position even when the command first returns the old position.
+func TestMPVPausedSeekPublishesCompletedPosition(t *testing.T) {
+	if !mpv.Ready() {
+		t.Skip("mpv not available")
+	}
+	path, err := filepath.Abs("testdata/seek.flac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	posted := make(chan func(), 32)
+	p := New(func(fn func()) { posted <- fn })
+	t.Cleanup(func() {
+		p.Changed = nil
+		p.Reset()
+		p.SetUseMPV(false)
+		if p.dlnaCtrl != nil {
+			p.dlnaCtrl.Close()
+		}
+	})
+	p.SetUseMPV(true)
+	p.SetMPVConfig(mpv.Config{NullAO: true})
+	p.ResolveStream = func(context.Context, *pluginapi.Track, string) (*pluginapi.Stream, error) {
+		return &pluginapi.Stream{URL: path, Type: "flac"}, nil
+	}
+
+	wait := func(ready func() bool, failure string) {
+		t.Helper()
+		timer := time.NewTimer(3 * time.Second)
+		defer timer.Stop()
+		for !ready() {
+			select {
+			case fn := <-posted:
+				fn()
+			case <-timer.C:
+				t.Fatalf("%s: position %s, error %q", failure, p.Position(), p.Err())
+			}
+		}
+	}
+	p.PlayQueue([]pluginapi.Track{{ID: 405, Duration: 5000}}, 0)
+	wait(func() bool { return p.mpvOut != nil && p.lyricsLoaded }, "MPV never loaded")
+	p.TogglePlay()
+	wait(func() bool { return !p.mpvOut.Playing() }, "MPV never paused")
+
+	const target = 2 * time.Second
+	p.Seek(target)
+	var published bool
+	p.Changed = func() {
+		// MPV's audio clock accounts for the device buffer after a seek.
+		published = !p.Playing() && !p.mpvOut.Playing() && (p.Position()-target).Abs() <= 250*time.Millisecond
+	}
+	wait(func() bool { return published }, "MPV did not publish the settled paused position")
 }
 
 type testFadeOutput struct {

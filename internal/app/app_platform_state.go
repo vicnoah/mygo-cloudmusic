@@ -2,8 +2,12 @@ package app
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
+
 	"github.com/egoist/mygo"
-	appplatform "waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/platformrpc"
+	appplatform "github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 // Plugin registration and native window state.
@@ -18,4 +22,16 @@ type appPlatformState struct {
 	platformGeneration    uint64
 	platformContext       context.Context
 	cancelPlatform        context.CancelFunc
+	pluginActivations     platformrpc.Activations
+	platformScope         platformrpc.Scope
+	platformAuthority     atomic.Pointer[platformAuthority]
+	localPlugins          map[appplatform.ID]*localPlugin
+	pluginWorkers         sync.WaitGroup
+	catalogPackage        string
+	pluginSource          pluginSourceEditor
+}
+
+type platformAuthority struct {
+	id  appplatform.ID
+	ctx context.Context
 }

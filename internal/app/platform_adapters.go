@@ -4,8 +4,7 @@ import (
 	"runtime"
 
 	"github.com/egoist/mygo"
-
-	appplatform "waygu-music/internal/pluginapi"
+	appplatform "github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 func newPlatformAdapters(a *app) {
@@ -18,14 +17,12 @@ func newPlatformAdapters(a *app) {
 	a.platformWindows = make(map[appplatform.ID]map[appplatform.WindowID]appplatform.Window, len(a.platformRegistrations))
 	a.platformMenus = make(map[appplatform.ID]map[appplatform.MenuID]func() *mygo.Menu, len(a.platformRegistrations))
 	a.platformLifecycles = make(map[appplatform.ID]appplatform.Lifecycle, len(a.platformRegistrations))
-	host := platformHost{a: a}
 	var panel *appplatform.MenuBarPanel
 	if runtime.GOOS == "darwin" {
 		panel = &appplatform.MenuBarPanel{
 			CameraHousing: notchSize, MenuBarHeight: menuBarHeight,
 			Raise: raiseAboveMenuBar, Pin: pinToTop, WatchPointer: watchPointer,
-			Preferences:     a.quickPlayerPreferences,
-			SavePreferences: a.saveQuickPlayerPreferences,
+			Preferences: a.quickPlayerPreferences,
 		}
 	}
 	for _, entry := range a.platformRegistrations {
@@ -34,11 +31,22 @@ func newPlatformAdapters(a *app) {
 		}
 		windows := make(map[appplatform.WindowID]appplatform.Window)
 		menus := make(map[appplatform.MenuID]func() *mygo.Menu)
+		host := platformHost{a: a, id: entry.ID}
+		entryPanel := panel
+		if panel != nil {
+			configured := *panel
+			configured.SavePreferences = func(prefs appplatform.QuickPlayerPreferences) {
+				if host.canWrite() {
+					a.saveQuickPlayerPreferences(prefs)
+				}
+			}
+			entryPanel = &configured
+		}
 
 		a.platforms[entry.ID] = entry.Start(appplatform.Startup{
 			Host:         host,
 			Settings:     pluginSettingsStore{a: a, entry: entry},
-			MenuBarPanel: panel,
+			MenuBarPanel: entryPanel,
 			RegisterWindow: func(id appplatform.WindowID, window appplatform.Window) {
 				windows[id] = window
 			},

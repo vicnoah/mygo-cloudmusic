@@ -6,8 +6,8 @@ import (
 	"runtime"
 
 	"github.com/egoist/mygo"
-
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
+	"github.com/waygu-music-plugin/sdk/protocol"
 )
 
 // The app's icon in the menu bar on macOS, as the settings choose
@@ -91,5 +91,69 @@ func (a *app) applyTray() {
 // trayMenu is the icon's menu: the window, the player's controls,
 // settings, updates, and quitting.
 func (a *app) trayMenu() *mygo.Menu {
-	return a.platformMenu(pluginapi.TrayMenu)
+	if len(a.localPlugins) != 0 {
+		click := func(fn func()) func(*mygo.MenuItem, *mygo.Window) {
+			return func(*mygo.MenuItem, *mygo.Window) { fn() }
+		}
+		items := []*mygo.MenuItem{
+			{Label: "显示主窗口", Click: click(a.showMain)},
+			{Label: "插件管理…", Click: click(a.openPluginManager)},
+		}
+		lockLabel := "锁定桌面歌词"
+		if a.desktopLyricsPrefs().Locked {
+			lockLabel = "解锁桌面歌词"
+		}
+		if remote := a.remoteActive(); remote != nil {
+			invoke := func(action string) func() {
+				return func() {
+					if a.remoteActive() == remote {
+						go func() { _, _ = remote.action(action) }()
+					}
+				}
+			}
+			if remote.info.SupportsWindowAction("settings") {
+				items = append(items, &mygo.MenuItem{Label: "设置…", Click: click(invoke("settings"))})
+			}
+			if remote.supportsDesktopLyrics() {
+				items = append(items,
+					&mygo.MenuItem{Label: "桌面歌词", Click: click(invoke(protocol.WindowToggleDesktopLyrics))},
+					&mygo.MenuItem{Label: lockLabel, Click: click(invoke(protocol.WindowToggleDesktopLyricsLock))},
+				)
+			}
+		} else {
+			h := platformHost{a: a}
+			var local []*mygo.MenuItem
+			if a.platformWindows[a.platformID][pluginapi.SettingsWindow].Root != nil {
+				local = append(local, &mygo.MenuItem{Label: "设置…", Click: click(a.openSettings)})
+			}
+			if a.desktopLyrics.IsOpen() {
+				local = append(local,
+					&mygo.MenuItem{Label: "桌面歌词", Click: click(h.ToggleDesktopLyrics)},
+					&mygo.MenuItem{Label: lockLabel, Click: click(h.ToggleDesktopLyricsLock)},
+				)
+			}
+			bindMenuActions(local, a.platformContext)
+			items = append(items, local...)
+		}
+		items = append(items,
+			mygo.Separator(),
+			&mygo.MenuItem{Label: "播放/暂停", Click: click(a.pl.TogglePlay)},
+			&mygo.MenuItem{Label: "上一首", Click: click(a.pl.Prev)},
+			&mygo.MenuItem{Label: "下一首", Click: click(a.pl.Next)},
+			mygo.Separator(),
+			&mygo.MenuItem{Label: "退出肥牛音乐", Click: click(mygo.App.Quit)},
+		)
+		return mygo.NewMenu(items)
+	}
+	menu := a.platformMenu(pluginapi.TrayMenu)
+	if !a.hasPluginManager() {
+		return menu
+	}
+	var items []*mygo.MenuItem
+	if menu != nil {
+		items = menu.Items()
+	}
+	return mygo.NewMenu(append([]*mygo.MenuItem{{
+		Label: "插件管理…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openPluginManager() },
+	}}, items...))
 }

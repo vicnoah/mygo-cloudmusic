@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
+	"math"
 	"sync"
 	"time"
 
 	gomp3 "github.com/hajimehoshi/go-mp3"
 
-	"waygu-music/internal/pluginapi"
+	"github.com/waygu-music-plugin/sdk/pluginapi"
 )
 
 // hlsStream decodes an MP3 source that arrives in ordered pieces. A
@@ -19,6 +20,7 @@ import (
 // An MP3 frame borrows bits from the frames before it, so the decoder starts
 // a piece early on a seek, and drops what that decodes (the preroll).
 type hlsStream struct {
+	ctx    context.Context
 	h      pluginapi.SegmentedSource
 	starts []int64 // the frame each piece starts at, by the lengths given
 	rate   int
@@ -41,22 +43,22 @@ type hlsStream struct {
 // jitter while keeping memory usage modest.
 const hlsAhead = 32
 
-func openSegmentedStream(h pluginapi.SegmentedSource) (*hlsStream, error) {
+func openSegmentedStream(ctx context.Context, h pluginapi.SegmentedSource) (*hlsStream, error) {
 	if h == nil || h.SegmentCount() == 0 {
 		return nil, io.ErrUnexpectedEOF
 	}
-	s := &hlsStream{h: h, seen: map[int]bool{}}
+	s := &hlsStream{ctx: ctx, h: h, seen: map[int]bool{}}
 	s.prog = &download{size: int64(h.SegmentCount())}
 	s.prog.cond.L = &s.prog.mu
 	if err := s.start(0); err != nil {
 		return nil, err
 	}
 	s.rate = s.dec.SampleRate()
-	s.frames = int64(h.TotalDuration().Seconds() * float64(s.rate))
+	s.frames = int64(math.Round(h.TotalDuration().Seconds() * float64(s.rate)))
 	s.starts = make([]int64, h.SegmentCount()+1)
 	var at float64
 	for i := 0; i < h.SegmentCount(); i++ {
-		s.starts[i] = int64(at * float64(s.rate))
+		s.starts[i] = int64(math.Round(at * float64(s.rate)))
 		at += h.SegmentDuration(i).Seconds()
 	}
 	s.starts[h.SegmentCount()] = s.frames
@@ -69,7 +71,7 @@ func (s *hlsStream) start(i int) error {
 	if s.rd != nil {
 		s.rd.close()
 	}
-	s.rd = newPieceReader(s.h, i, s.prog, s.seen)
+	s.rd = newPieceReader(s.ctx, s.h, i, s.prog, s.seen)
 	dec, err := gomp3.NewDecoder(s.rd)
 	if err != nil {
 		s.rd.close()
@@ -85,6 +87,9 @@ func (s *hlsStream) Len() int64      { return s.frames }
 
 func (s *hlsStream) Read(dst []float32) (int, error) {
 	n := len(dst) / 2 * 4
+	if n == 0 {
+		return 0, nil
+	}
 	if cap(s.buf) < n {
 		s.buf = make([]byte, n)
 	}
@@ -125,7 +130,7 @@ func (s *hlsStream) SetPosition(frame int64) error {
 	if err := s.start(from); err != nil {
 		return err
 	}
-	s.pos = s.starts[from]
+	s.pos = frame
 	s.skip = int(frame-s.starts[from]) * 4
 	return nil
 }
@@ -149,6 +154,7 @@ func (s *hlsStream) Close() error {
 // there, a third of a second. Asking for four at once makes it start over
 // for each, in turn, and a whole song then takes minutes.
 type pieceReader struct {
+	ctx    context.Context
 	cancel context.CancelFunc
 	pieces chan pieceResult
 	cur    []byte
@@ -159,10 +165,9 @@ type pieceResult struct {
 	err error
 }
 
-func newPieceReader(h pluginapi.SegmentedSource, from int, prog *download, seen map[int]bool) *pieceReader {
-	ctx, cancel := context.WithCancel(context.Background())
-	capacity := max(h.SegmentCount()-from, hlsAhead)
-	r := &pieceReader{cancel: cancel, pieces: make(chan pieceResult, capacity)}
+func newPieceReader(parent context.Context, h pluginapi.SegmentedSource, from int, prog *download, seen map[int]bool) *pieceReader {
+	ctx, cancel := context.WithCancel(parent)
+	r := &pieceReader{ctx: ctx, cancel: cancel, pieces: make(chan pieceResult, hlsAhead)}
 	go func() {
 		defer close(r.pieces)
 		for i := from; i < h.SegmentCount(); i++ {
@@ -213,15 +218,22 @@ func countPiece(prog *download, seen map[int]bool, i int) {
 }
 
 func (r *pieceReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
 	for len(r.cur) == 0 {
-		res, ok := <-r.pieces
-		if !ok {
-			return 0, io.EOF
+		select {
+		case res, ok := <-r.pieces:
+			if !ok {
+				return 0, io.EOF
+			}
+			if res.err != nil {
+				return 0, res.err
+			}
+			r.cur = res.b
+		case <-r.ctx.Done():
+			return 0, r.ctx.Err()
 		}
-		if res.err != nil {
-			return 0, res.err
-		}
-		r.cur = res.b
 	}
 	n := copy(p, r.cur)
 	r.cur = r.cur[n:]
