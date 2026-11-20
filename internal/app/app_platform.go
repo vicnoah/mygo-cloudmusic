@@ -18,6 +18,9 @@ func (a *app) activePlatform() pluginapi.Adapter {
 	if a == nil || a.platforms == nil {
 		return nil
 	}
+	if remote := a.remoteActive(); remote != nil {
+		return remote.adapter
+	}
 	return a.platforms[a.platformID]
 }
 
@@ -144,6 +147,9 @@ func (a *app) platformReady(coldStart bool) {
 }
 
 func (a *app) activatePlatformView() {
+	if local := a.localPlugins[a.platformID]; local != nil {
+		a.activeRemote.Store(local.adapter.active.Load())
+	}
 	if remote := a.remoteActive(); remote != nil {
 		a.platformScope = remote.scope
 	} else {
@@ -176,6 +182,9 @@ func (a *app) trackPlatform(tr *pluginapi.Track) (pluginapi.ID, bool) {
 	if tr == nil {
 		return "", false
 	}
+	if remote := a.remoteActive(); remote != nil && remote.adapter.OwnsTrack(tr) {
+		return remote.owner, true
+	}
 	// Sources that are also instance IDs must win over legacy source aliases.
 	id := pluginapi.ID(tr.Source)
 	if adapter := a.platforms[id]; adapter != nil && adapter.OwnsTrack(tr) {
@@ -191,6 +200,9 @@ func (a *app) trackPlatform(tr *pluginapi.Track) (pluginapi.ID, bool) {
 
 func (a *app) trackAdapter(tr *pluginapi.Track) pluginapi.Adapter {
 	if id, ok := a.trackPlatform(tr); ok {
+		if remote := a.remoteActive(); remote != nil && remote.owner == id {
+			return remote.adapter
+		}
 		return a.platforms[id]
 	}
 	return nil

@@ -1,6 +1,6 @@
 # 平台插件
 
-飞牛音乐随宿主提供。Songloft、Subsonic 兼容服务、网易云音乐和 QQ 音乐从[官方插件目录](https://github.com/waygu-music-plugin/registry)安装。打开托盘或应用菜单的「插件管理」，选择插件包并点「安装或更新」。更换自建目录时，在「来源设置」填写 HTTPS 插件目录地址。
+飞牛音乐随宿主提供。打开托盘或应用菜单的「插件管理」，每个插件都有独立的一行，可安装、启用和更新。Subsonic 的连接类型在其自己的「设置」窗口选择。在「来源设置」填写 HTTPS 地址可添加额外插件目录。[官方插件目录](https://github.com/waygu-music-plugin/registry)
 
 插件默认通过 GH-Proxy 获取 GitHub 上的目录、发布清单和安装包。在「插件管理 → 来源设置」关闭「GitHub 下载加速」并保存，即可让所有插件直接访问 GitHub。自建站点使用其原有地址。[GH-Proxy 使用指南](https://gh-proxy.com/docs/github-accelerator)
 

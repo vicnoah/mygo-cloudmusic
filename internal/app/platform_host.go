@@ -36,6 +36,13 @@ func allowedWrite(guard func() bool) bool { return guard == nil || guard() }
 // unscoped URLs using the instance captured when the request was made.
 func (h platformHost) fetchArtwork(ctx context.Context, current appplatform.ID, raw string) ([]byte, error) {
 	if owner, ref, ok := appplatform.ArtworkOwner(raw); ok {
+		if remote := h.a.remoteActive(); remote != nil && (current == remote.owner && owner == remote.adapter.id) {
+			data, handled, err := remote.adapter.FetchArtwork(ctx, ref, 600)
+			if handled || err != nil {
+				return data, err
+			}
+			return nil, appplatform.ErrUnavailable
+		}
 		if adapter := h.a.platforms[owner]; adapter != nil {
 			data, handled, err := adapter.FetchArtwork(ctx, ref, 600)
 			if handled || err != nil {
@@ -43,6 +50,11 @@ func (h platformHost) fetchArtwork(ctx context.Context, current appplatform.ID, 
 			}
 		}
 		return nil, appplatform.ErrUnavailable
+	}
+	if remote := h.a.remoteActive(); remote != nil && current == remote.owner {
+		if data, handled, err := remote.adapter.FetchArtwork(ctx, raw, 600); handled || err != nil {
+			return data, err
+		}
 	}
 	if adapter := h.a.platforms[current]; adapter != nil {
 		data, handled, err := adapter.FetchArtwork(ctx, raw, 600)

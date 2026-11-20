@@ -29,6 +29,7 @@ type Catalog struct {
 
 type CatalogEntry struct {
 	Package   string
+	Name      string `json:",omitempty"`
 	Manifest  string
 	PublicKey ed25519.PublicKey `json:"PublicKey,omitempty"`
 }
@@ -50,6 +51,7 @@ type Release struct {
 	Format           int
 	Protocol         uint16
 	Package, Version string
+	Name             string `json:",omitempty"`
 	Entries          []string
 	Artifacts        []Artifact
 }
@@ -66,22 +68,16 @@ func (s Source) lookup(ctx context.Context, client *http.Client) (CatalogEntry, 
 	if !safeID(s.Package) || (len(s.TrustedKey) != 0 && len(s.TrustedKey) != ed25519.PublicKeySize) {
 		return CatalogEntry{}, errors.New("invalid plugin source")
 	}
-	var catalog Catalog
-	if err := getJSON(ctx, client, s.Catalog, s.UseGitHubProxy, &catalog); err != nil {
+	catalog, err := readCatalog(ctx, client, s.Catalog, s.UseGitHubProxy)
+	if err != nil {
 		return CatalogEntry{}, err
-	}
-	if catalog.Format != 1 {
-		return CatalogEntry{}, errors.New("unsupported plugin catalog format")
 	}
 	var selected CatalogEntry
 	for _, entry := range catalog.Packages {
-		if entry.Package != s.Package {
-			continue
+		if entry.Package == s.Package {
+			selected = entry
+			break
 		}
-		if selected.Manifest != "" || entry.Manifest == "" {
-			return CatalogEntry{}, errors.New("invalid package entry in plugin catalog")
-		}
-		selected = entry
 	}
 	if selected.Manifest == "" {
 		return CatalogEntry{}, errors.New("package not found in plugin catalog")
@@ -96,6 +92,24 @@ func (s Source) lookup(ctx context.Context, client *http.Client) (CatalogEntry, 
 		return CatalogEntry{}, errors.New("plugin release is from a different source or key")
 	}
 	return selected, nil
+}
+
+func readCatalog(ctx context.Context, client *http.Client, raw string, useProxy bool) (Catalog, error) {
+	var catalog Catalog
+	if err := getJSON(ctx, client, raw, useProxy, &catalog); err != nil {
+		return Catalog{}, err
+	}
+	if catalog.Format != 1 {
+		return Catalog{}, errors.New("unsupported plugin catalog format")
+	}
+	seen := make(map[string]bool)
+	for _, entry := range catalog.Packages {
+		if !safeID(entry.Package) || seen[entry.Package] || entry.Manifest == "" {
+			return Catalog{}, errors.New("invalid package entry in plugin catalog")
+		}
+		seen[entry.Package] = true
+	}
+	return catalog, nil
 }
 
 func (e CatalogEntry) release(ctx context.Context, client *http.Client, useGitHubProxy bool) (Release, error) {

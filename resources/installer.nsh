@@ -20,6 +20,7 @@
   Delete "$INSTDIR\MyGo 云音乐.exe"
   Delete "$SMPROGRAMS\MyGo 云音乐.lnk"
   Delete "$DESKTOP\MyGo 云音乐.lnk"
+  ExecWait '"$INSTDIR\Wagyu Music.exe" --prepare-installer-shortcuts'
   nsExec::Exec 'netsh advfirewall firewall delete rule name="MyGo 云音乐"'
   nsExec::Exec 'netsh advfirewall firewall delete rule name="肥牛音乐"'
   nsExec::Exec 'netsh advfirewall firewall add rule name="肥牛音乐" dir=in action=allow program="$INSTDIR\Wagyu Music.exe" enable=yes profile=private,public'

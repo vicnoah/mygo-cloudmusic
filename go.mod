@@ -12,8 +12,9 @@ require (
 	github.com/mewkiz/flac v1.0.14
 	github.com/supersonic-app/go-upnpcast v0.1.1-0.20260517163705-d76cd97c192f
 	github.com/waygu-music-plugin/fnmusic v0.1.0
-	github.com/waygu-music-plugin/sdk v0.1.0
+	github.com/waygu-music-plugin/sdk v0.1.1
 	golang.org/x/image v0.46.0
+	golang.org/x/sys v0.48.0
 )
 
 require (
@@ -37,7 +38,6 @@ require (
 	go.digitalxero.dev/rpm v0.3.4 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/net v0.59.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20231106174013-bbf56f31fb17 // indirect
 	google.golang.org/grpc v1.61.0 // indirect

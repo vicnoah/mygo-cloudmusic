@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/waygu-music-plugin/sdk/platformrpc"
 	"github.com/waygu-music-plugin/sdk/pluginapi"
 
 	"waygu-music/internal/pluginregistry"
@@ -25,7 +24,7 @@ func TestPluginManagerSwitchPersistsSelection(t *testing.T) {
 	t.Cleanup(func() { a.deactivatePlatformView(false) })
 
 	tt := ui.NewTester(a.pluginManagerView, 520, 560)
-	if err := tt.Click("使用 second"); err != nil {
+	if err := tt.Click("启用 second"); err != nil {
 		t.Fatal(err)
 	}
 	if a.platformID != "second" {
@@ -41,22 +40,12 @@ func TestPluginManagerSwitchPersistsSelection(t *testing.T) {
 	}
 }
 
-// Editing a package source saves only that package and discards edits when cancelled.
-func TestPluginManagerSourceEditorSavesSelectedPackage(t *testing.T) {
+// Cancelling the source editor discards its draft, and saving adds the directory without changing existing sources.
+func TestPluginManagerSavesAdditionalCatalog(t *testing.T) {
 	a := newTestApp()
-	dir := t.TempDir()
-	a.settings.path = filepath.Join(dir, "settings.json")
-	registry, err := pluginregistry.New(filepath.Join(dir, "registry"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.localPlugins = make(map[pluginapi.ID]*localPlugin)
-	for _, id := range []string{"first", "second"} {
-		entry := testRegistration(pluginapi.ID(id), nil)
-		a.platformRegistrations = append(a.platformRegistrations, entry)
-		a.localPlugins[entry.ID] = &localPlugin{entry: entry, registry: registry,
-			program: platformrpc.Program{Identity: platformrpc.Identity{Package: id, Entry: id}}}
-	}
+	a.settings.path = filepath.Join(t.TempDir(), "settings.json")
+	a.managedPlugins = make(map[string]*managedPlugin)
+	a.settings.PluginCatalogs = map[string]pluginCatalogSettings{"existing": {URL: "https://original.example/catalog.json"}}
 	view := ui.NewTester(a.pluginManagerView, 810, 650)
 	click := func(label string) {
 		t.Helper()
@@ -64,29 +53,44 @@ func TestPluginManagerSourceEditorSavesSelectedPackage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	click("管理 second")
 	click("来源设置…")
 	view.Type("https://cancel.example/catalog.json")
 	click("取消")
-	if len(a.settings.PluginCatalogs) != 0 || a.localPlugins["second"].catalog != "" {
+	if a.settings.PluginCatalogURL != "" {
 		t.Fatal("cancelling saved an unfinished source")
 	}
 	click("来源设置…")
-	if !view.Focused("插件目录 URL") {
-		t.Fatal("the new source editor did not focus its URL field")
-	}
 	view.Type("https://repo.example/catalog.json")
 	click("保存")
 	data, err := os.ReadFile(a.settings.path)
 	if err != nil {
-		t.Fatalf("source was not saved: %v (%s)", err, a.pluginSource.message)
+		t.Fatal(err)
 	}
 	var saved settings
 	if err := json.Unmarshal(data, &saved); err != nil {
 		t.Fatal(err)
 	}
-	if len(saved.PluginCatalogs) != 1 || saved.PluginCatalogs["second"] != (pluginCatalogSettings{URL: "https://repo.example/catalog.json"}) || a.pluginSource.open {
-		t.Fatalf("source edit did not save the selected package and close the dialog: %+v", saved.PluginCatalogs)
+	if saved.PluginCatalogURL != "https://repo.example/catalog.json" || saved.PluginCatalogs["existing"].URL != "https://original.example/catalog.json" {
+		t.Fatalf("adding a catalog changed the existing source: %+v", saved.platformSettings)
+	}
+}
+
+// Enabling a package reuses the last connection and preserves the entry ID saved by Alpha.
+func TestPluginPackageReusesLegacyConnection(t *testing.T) {
+	a := newTestApp()
+	a.localPlugins = make(map[pluginapi.ID]*localPlugin)
+	a.settings.Platform = "jellyfin"
+	pkg := &managedPlugin{id: "subsonic"}
+	a.setInstalled(pkg, pluginregistry.Installed{Program: pluginregistry.Program{Path: "program", Version: pluginregistry.Version{
+		Platforms: []string{"navidrome", "jellyfin", "gonic", "subsonic"},
+	}}})
+	if active := a.preferredPluginEntry(pkg); active != "jellyfin" || a.localPlugins[active].entry.LegacySettingsKey != "jellyfin" {
+		t.Fatalf("saved profile was replaced: %q", active)
+	}
+	a.settings.Platform = "fnmusic"
+	a.settings.LastPluginEntries = map[string]string{"subsonic": "navidrome"}
+	if active := a.preferredPluginEntry(pkg); active != "navidrome" {
+		t.Fatalf("activating Subsonic again did not restore its connection: %q", active)
 	}
 }
 
@@ -94,17 +98,7 @@ func TestPluginManagerSourceEditorSavesSelectedPackage(t *testing.T) {
 func TestPluginManagerProxyPreference(t *testing.T) {
 	a := newTestApp()
 	a.settings.path = filepath.Join(t.TempDir(), "settings.json")
-	registry, err := pluginregistry.New(t.TempDir(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.localPlugins = make(map[pluginapi.ID]*localPlugin)
-	for _, id := range []string{"first", "second"} {
-		entry := testRegistration(pluginapi.ID(id), nil)
-		a.platformRegistrations = append(a.platformRegistrations, entry)
-		a.localPlugins[entry.ID] = &localPlugin{entry: entry, registry: registry, catalog: "https://repo.example/catalog.json",
-			program: platformrpc.Program{Identity: platformrpc.Identity{Package: id, Entry: id}}}
-	}
+	a.managedPlugins = make(map[string]*managedPlugin)
 	view := ui.NewTester(a.pluginManagerView, 810, 650)
 	click := func(label string) {
 		t.Helper()
@@ -126,7 +120,6 @@ func TestPluginManagerProxyPreference(t *testing.T) {
 	if !saved.DisablePluginGitHubProxy || len(saved.PluginCatalogs) != 0 {
 		t.Fatal("saving the switch did not disable the proxy or overwrote a catalog")
 	}
-	click("管理 second")
 	click("来源设置…")
 	if a.pluginSource.useGitHubProxy {
 		t.Fatal("the other plugin did not inherit the disabled proxy preference")

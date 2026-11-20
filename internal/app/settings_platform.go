@@ -12,6 +12,8 @@ type platformSettings struct {
 	Plugins                  map[appplatform.ID]json.RawMessage `json:"plugins,omitempty"`
 	Platform                 string                             `json:"platform,omitempty"`
 	PluginCatalogs           map[string]pluginCatalogSettings   `json:"pluginCatalogs,omitempty"`
+	PluginCatalogURL         string                             `json:"pluginCatalogURL,omitempty"`
+	LastPluginEntries        map[string]string                  `json:"lastPluginEntries,omitempty"`
 	DisablePluginGitHubProxy bool                               `json:"disablePluginGitHubProxy,omitempty"`
 	LegacySubsonicSession    *legacySubsonicSession             `json:"legacySubsonicSession,omitempty"`
 

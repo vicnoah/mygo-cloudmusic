@@ -234,6 +234,23 @@ func (r pluginReverse) apply(in PluginHostCall, reply *PluginHostReply) error {
 		h.SetUpdateDownloads(in.Flag)
 	case "manage":
 		a.openPluginManager()
+	case "window-visibility":
+		if active := a.remoteActive(); active != nil {
+			active.visible = in.Flag
+			a.syncDock()
+		}
+	case "plugin-entry":
+		current := a.localPlugins[a.platformID]
+		if current == nil {
+			return platformrpc.Failure{Code: "unknown-entry"}
+		}
+		pkg := current.program.Identity.Package
+		next := externalRegistration(pkg, in.Text).ID
+		local := a.localPlugins[next]
+		if local == nil || local.program.Identity.Package != pkg || local.program.Identity.Entry != in.Text || local.program.Path == "" {
+			return platformrpc.Failure{Code: "unknown-entry"}
+		}
+		a.startLocalPlugin(next)
 	case "preferences-save":
 		if !json.Valid(in.Settings) {
 			return platformrpc.Failure{Code: "invalid-settings"}
@@ -277,10 +294,8 @@ func (a *app) processOwnsTracks(tracks []pluginapi.Track) bool {
 }
 
 func (a *app) saveProcessSettings(data json.RawMessage) error {
-	for _, entry := range a.platformRegistrations {
-		if entry.ID != a.platformID {
-			continue
-		}
+	if local := a.localPlugins[a.platformID]; local != nil {
+		entry := local.entry
 		var flat map[string]json.RawMessage
 		if len(entry.LegacySettingsFields) != 0 {
 			if err := json.Unmarshal(data, &flat); err != nil {

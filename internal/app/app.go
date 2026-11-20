@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"log"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -93,10 +94,10 @@ func (a *app) showMain() {
 
 // Run runs the app until it quits.
 func Run(registrations []appplatform.Registration) error {
-	return run(registrations, nil)
+	return run(registrations, false)
 }
 
-func run(registrations []appplatform.Registration, local map[appplatform.ID]*localPlugin) error {
+func run(registrations []appplatform.Registration, managed bool) error {
 	// Before the lock and anything that reads them: the app's folders are
 	// named in ASCII, though it calls itself 肥牛音乐.
 	useDataPaths()
@@ -106,7 +107,20 @@ func run(registrations []appplatform.Registration, local map[appplatform.ID]*loc
 	if !mygo.App.RequestSingleInstanceLock() {
 		return nil
 	}
-	a := &app{cacheUsed: -1, appPlatformState: appPlatformState{platformRegistrations: registrations, localPlugins: local}}
+	if err := desktop.SetApplicationIdentity(desktopApplicationID()); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" && !mygo.IsDev() {
+		if err := PrepareInstallerShortcuts(); err != nil {
+			log.Print(err)
+		}
+	}
+	a := &app{cacheUsed: -1, appPlatformState: appPlatformState{platformRegistrations: registrations}}
+	if managed {
+		a.managedPlugins = make(map[string]*managedPlugin)
+		a.localPlugins = make(map[appplatform.ID]*localPlugin)
+		a.pluginContext, a.cancelPlugins = context.WithCancel(context.Background())
+	}
 	var startupErr error
 	moveOldData()
 	a.useUpdater()
@@ -142,6 +156,7 @@ func run(registrations []appplatform.Registration, local map[appplatform.ID]*loc
 		a.activatePlatformView()
 		options := a.windowOptions(appplatform.MainWindow)
 		a.win = mygo.NewWindow(options)
+		_ = a.win.SetIcon(desktopApplicationIcon())
 		a.measureCache()
 		a.syncPlatformWindows()
 		a.setMenu()
@@ -158,7 +173,7 @@ func run(registrations []appplatform.Registration, local map[appplatform.ID]*loc
 			}
 		})
 		a.applyTray()
-		if id := appplatform.ID(a.settings.Platform); local[id] != nil && local[id].program.Path != "" {
+		if id := appplatform.ID(a.settings.Platform); a.localPlugins[id] != nil && a.localPlugins[id].program.Path != "" {
 			a.startLocalPlugin(id)
 		}
 		// Closing the window hides it: music plays on, and the Dock icon
@@ -178,6 +193,9 @@ func run(registrations []appplatform.Registration, local map[appplatform.ID]*loc
 	})
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
 		a.quitting = true
+		if a.cancelPlugins != nil {
+			a.cancelPlugins()
+		}
 		if startupErr != nil {
 			return
 		}

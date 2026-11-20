@@ -4,19 +4,18 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
 	"github.com/waygu-music-plugin/sdk/bridge"
 	"github.com/waygu-music-plugin/sdk/platformrpc"
 	"github.com/waygu-music-plugin/sdk/pluginapi"
 	"github.com/waygu-music-plugin/sdk/pluginapi/network"
 	"github.com/waygu-music-plugin/sdk/protocol"
-
-	"waygu-music/internal/pluginregistry"
 )
 
 var hostOffer = platformrpc.Offer{
@@ -25,7 +24,7 @@ var hostOffer = platformrpc.Offer{
 		platformrpc.CapabilityPlayback, platformrpc.CapabilitySettings, platformrpc.CapabilityMediaStreams,
 		protocol.CapabilityPlaybackEvents, protocol.CapabilityDesktopLyrics, protocol.CapabilityDesktopTasks,
 		protocol.CapabilityDesktopPatches,
-		protocol.CapabilityMediaRenewal,
+		protocol.CapabilityMediaRenewal, protocol.CapabilityPluginEntries,
 	},
 	Needs: []string{platformrpc.CapabilityWindow, platformrpc.CapabilityMedia, platformrpc.CapabilityMediaStreams},
 }
@@ -36,11 +35,6 @@ type localPlugin struct {
 	pending    context.CancelFunc
 	request    uint64
 	adapter    *processAdapter
-	registry   *pluginregistry.Registry
-	catalog    string
-	version    string
-	busy       bool
-	message    string
 	startError string
 }
 
@@ -51,10 +45,13 @@ type processAdapter struct {
 
 type pluginProcess struct {
 	transport *platformrpc.Process
+	owner     pluginapi.ID
+	adapter   *processAdapter
 	scope     platformrpc.Scope
 	info      PluginPrepared
 	pcm       chan struct{}
 	media     bridge.MediaSlots
+	visible   bool
 
 	// The event subscription and sequence belong to the host UI thread.
 	events        *pluginEventStream
@@ -63,31 +60,7 @@ type pluginProcess struct {
 
 // RunManaged uses locally installed releases with Feiniu built in.
 func RunManaged(registrations []pluginapi.Registration) error {
-	entries := append([]pluginapi.Registration(nil), registrations...)
-	plugins := make(map[pluginapi.ID]*localPlugin)
-	for i, entry := range entries {
-		if entry.Start != nil {
-			continue
-		}
-		id := entry.ID
-		adapter := &processAdapter{id: id}
-		program := platformrpc.Program{Identity: platformrpc.Identity{Package: platformPackage(id), Entry: string(id)}}
-		plugins[id] = &localPlugin{entry: entry, adapter: adapter, program: program}
-		entries[i].Start = func(s pluginapi.Startup) pluginapi.Adapter {
-			s.RegisterWindow(pluginapi.MainWindow, pluginapi.Window{Root: func(*ui.Context) {}})
-			return adapter
-		}
-	}
-	return run(entries, plugins)
-}
-
-func platformPackage(id pluginapi.ID) string {
-	switch id {
-	case "navidrome", "jellyfin", "gonic":
-		return "subsonic"
-	default:
-		return string(id)
-	}
+	return run(registrations, true)
 }
 
 // pluginCredentialService keeps the installed host's historical mygo.json
@@ -110,6 +83,9 @@ func (a *app) startLocalPlugin(id pluginapi.ID) {
 		a.openPluginManager()
 		return
 	}
+	if pkg := a.managedPlugins[local.program.Identity.Package]; pkg != nil && pkg.busy {
+		return
+	}
 	a.cancelLocalRequest()
 	dir, err := mygo.App.Path(mygo.PathUserData)
 	if err != nil {
@@ -117,9 +93,10 @@ func (a *app) startLocalPlugin(id pluginapi.ID) {
 		return
 	}
 	program := local.program
-	program.StateDir = filepath.Join(dir, "plugin-ui", string(local.entry.ID))
+	program.StateDir = filepath.Join(dir, "plugin-ui", url.PathEscape(string(local.entry.ID)))
 	program.LegacyCacheDir, _ = mygo.App.Path(mygo.PathCache)
 	program.CredentialService = pluginCredentialService()
+	program.ApplicationID = desktopApplicationID()
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	local.pending = cancel
 	local.request++
@@ -134,7 +111,8 @@ func (a *app) startLocalPlugin(id pluginapi.ID) {
 	}
 	local.startError = ""
 	a.redraw()
-	input := PluginPrepare{Settings: preferences, Tray: a.tray != nil, Appearance: a.settings.Appearance}
+	input := PluginPrepare{Settings: preferences, Tray: a.tray != nil || runtime.GOOS == "darwin",
+		Appearance: a.settings.Appearance, WindowIcon: desktopApplicationIcon()}
 	a.pluginWorkers.Go(func() {
 		defer cancel()
 		defer mygo.RunOnMain(func() {
@@ -156,7 +134,8 @@ func (a *app) startLocalPlugin(id pluginapi.ID) {
 			})
 			return
 		}
-		candidate := &pluginProcess{transport: process, pcm: make(chan struct{}, 4), media: bridge.NewMediaSlots()}
+		candidate := &pluginProcess{transport: process, owner: id, adapter: local.adapter,
+			pcm: make(chan struct{}, 4), media: bridge.NewMediaSlots()}
 		committed := false
 		defer func() {
 			if !committed {
@@ -198,7 +177,14 @@ func (a *app) startLocalPlugin(id pluginapi.ID) {
 			if !a.pluginActivations.Commit(candidate.scope) {
 				return
 			}
+			candidate.visible = true
 			local.adapter.active.Store(candidate)
+			if pkg := a.managedPlugins[local.program.Identity.Package]; pkg != nil {
+				if a.settings.LastPluginEntries == nil {
+					a.settings.LastPluginEntries = make(map[string]string)
+				}
+				a.settings.LastPluginEntries[pkg.id] = local.program.Identity.Entry
+			}
 			a.commitPlatform(local.entry.ID, true)
 			if candidate.supportsDesktopLyrics() {
 				activate.DesktopLyrics = bridge.WireDesktopLyricsPrefs(a.desktopLyricsPrefs())
@@ -233,16 +219,13 @@ func (a *app) cancelLocalRequest() {
 }
 
 func (a *app) remoteActive() *pluginProcess {
-	if local := a.localPlugins[a.platformID]; local != nil {
-		return local.adapter.active.Load()
-	}
-	return nil
+	return a.activeRemote.Load()
 }
 
 func (a *app) revokeLocalPlugin() {
-	if active := a.remoteActive(); active != nil {
+	if active := a.activeRemote.Swap(nil); active != nil {
 		a.pluginActivations.Revoke(active.scope)
-		a.localPlugins[a.platformID].adapter.active.Store(nil)
+		active.adapter.active.Store(nil)
 		a.pluginWorkers.Go(active.transport.Close)
 	}
 }
@@ -261,6 +244,7 @@ func (a *app) processLost(process *pluginProcess, err error) {
 
 func (a *app) showPluginError(local *localPlugin, err error) {
 	local.startError = "插件启动失败：" + err.Error()
+	a.catalogPackage = local.program.Identity.Package
 	if a.pluginsWin != nil {
 		a.pluginsWin.Invalidate()
 	} else if a.remoteActive() != nil {

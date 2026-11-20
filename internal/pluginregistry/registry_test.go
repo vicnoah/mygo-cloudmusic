@@ -80,7 +80,7 @@ func TestRegistryInstallUpdateAndRollback(t *testing.T) {
 				protocolVersion = 2
 			}
 			release, _ := json.Marshal(Release{
-				Format: 1, Protocol: protocolVersion, Package: "songloft", Version: version, Entries: []string{"songloft"},
+				Format: 1, Protocol: protocolVersion, Package: "songloft", Version: version, Name: "Songloft", Entries: []string{"songloft"},
 				Artifacts: []Artifact{{
 					OS: runtime.GOOS, Arch: runtime.GOARCH, URL: archiveURL, Entry: executable,
 					Size: int64(len(archive)), SHA256: fmt.Sprintf("%x", sha256.Sum256(archive)),
@@ -186,6 +186,10 @@ func TestRegistryInstallUpdateAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireInstalled("1.1")
+	installed, err := registry.Installed()
+	if err != nil || installed["songloft"].Name != "Songloft" || !installed["songloft"].CanRollback {
+		t.Fatalf("installed package lost the signed display name or rollback history: %+v, %v", installed, err)
+	}
 	latest.Store("1.2")
 	if _, err := registry.Install(ctx, source, probe); err == nil {
 		t.Fatal("installed an update that failed its compatibility check")

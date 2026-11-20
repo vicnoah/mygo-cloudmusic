@@ -23,6 +23,7 @@ const maxArchiveFiles = 4096
 
 type Version struct {
 	Version   string
+	Name      string `json:",omitempty"`
 	Archive   string
 	Entry     string
 	SHA256    [32]byte
@@ -41,6 +42,12 @@ type Program struct {
 	Version
 }
 
+type Installed struct {
+	Program
+	Source      string
+	CanRollback bool
+}
+
 type Registry struct {
 	dir    string
 	client *http.Client
@@ -55,6 +62,28 @@ func New(dir string, client *http.Client) (*Registry, error) {
 		client = http.DefaultClient
 	}
 	return &Registry{dir: dir, client: client}, nil
+}
+
+func (r *Registry) Catalog(ctx context.Context, raw string, useProxy bool) (Catalog, error) {
+	return readCatalog(ctx, r.client, raw, useProxy)
+}
+
+func (r *Registry) Installed() (map[string]Installed, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	index, err := r.read()
+	if err != nil {
+		return nil, err
+	}
+	programs := make(map[string]Installed, len(index))
+	for id, item := range index {
+		p, err := r.program(id, item.Current)
+		if err != nil {
+			return nil, err
+		}
+		programs[id] = Installed{Program: p, Source: item.Source, CanRollback: item.Previous != nil}
+	}
+	return programs, nil
 }
 
 // Install stages a signed release, checks the program while still staged,
@@ -114,7 +143,7 @@ func (r *Registry) Install(ctx context.Context, source Source, probe func(contex
 	archive, _ := checksum(artifact.SHA256)
 	version := Version{
 		Version: release.Version, Archive: hex.EncodeToString(archive[:]),
-		Entry: artifact.Entry, SHA256: expected, Platforms: release.Entries,
+		Entry: artifact.Entry, SHA256: expected, Platforms: release.Entries, Name: release.Name,
 	}
 	p := Program{Path: filepath.Join(extracted, entry), Version: version}
 	if err := checkProgram(p, probe, ctx); err != nil {

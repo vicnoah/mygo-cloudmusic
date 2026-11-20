@@ -44,7 +44,10 @@ func activationPolicy(s settings, windowOpen bool) mygo.ActivationPolicy {
 // windowOpen tells whether the main window or the settings window is
 // open: shown or minimized, as the notch player doesn't count.
 func (a *app) windowOpen() bool {
-	if a.settingsWin != nil {
+	if a.settingsWin != nil || a.pluginsWin != nil {
+		return true
+	}
+	if remote := a.remoteActive(); remote != nil && remote.visible {
 		return true
 	}
 	return a.win != nil && (a.win.IsVisible() || a.win.IsMinimized())
@@ -91,7 +94,7 @@ func (a *app) applyTray() {
 // trayMenu is the icon's menu: the window, the player's controls,
 // settings, updates, and quitting.
 func (a *app) trayMenu() *mygo.Menu {
-	if len(a.localPlugins) != 0 {
+	if a.managedPlugins != nil {
 		click := func(fn func()) func(*mygo.MenuItem, *mygo.Window) {
 			return func(*mygo.MenuItem, *mygo.Window) { fn() }
 		}
