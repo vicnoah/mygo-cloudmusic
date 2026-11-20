@@ -75,7 +75,7 @@ function Plugins() {
               <For each={filtered()}>{(plugin) => <PluginCard plugin={plugin} />}</For>
             </div>
           </Show>
-          <p class="plugins-help">网页安装需要支持此功能的新版客户端。也可以打开桌面端的「插件管理」，按名称安装官方插件。</p>
+          <p class="plugins-help">网页安装需要肥牛音乐 0.2.30 或更新版本。升级后先启动一次客户端。也可以在「插件管理」中按名称安装官方插件。</p>
         </section>
         <section class="plugins-publish" aria-labelledby="publish-title">
           <h2 id="publish-title">发布你的插件</h2>
