@@ -208,8 +208,8 @@ func run(registrations []appplatform.Registration, managed bool) error {
 			}
 		})
 		a.applyTray()
-		if repo := a.pluginLink.repo; repo != "" {
-			a.reviewPluginLink(repo)
+		if link := a.pluginLink; link.repo != "" || link.message != "" {
+			a.reviewPluginLink(link.repo, link.message)
 		} else {
 			a.resumeStartupPlatform()
 		}
@@ -262,7 +262,7 @@ func run(registrations []appplatform.Registration, managed bool) error {
 	mygo.App.OnSecondInstance(func(args []string, _ string) {
 		if managed {
 			for _, arg := range args {
-				if _, err := pluginLinkRepository(arg, linkScheme); err == nil {
+				if _, err := pluginLinkRepository(arg, linkScheme); err != errNotPluginLink {
 					return // OnOpenURL focuses the plugin manager.
 				}
 			}

@@ -18,7 +18,8 @@ type pluginStartup struct {
 
 func (a *app) startupWindowOptions() mygo.WindowOptions {
 	options := a.windowOptions(pluginapi.MainWindow)
-	if a.managedPlugins != nil && (a.pluginLink.repo != "" || string(a.platformID) != a.settings.Platform) {
+	link := a.pluginLink
+	if a.managedPlugins != nil && (link.repo != "" || link.message != "" || string(a.platformID) != a.settings.Platform) {
 		// Keep the host window available for dispatch without mounting a
 		// platform until the requested platform is ready.
 		a.platformID = ""

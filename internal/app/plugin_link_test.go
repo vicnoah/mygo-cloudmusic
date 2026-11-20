@@ -1,12 +1,43 @@
 package app
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
 
 	"waygu-music/internal/pluginregistry"
 )
+
+// Windows added a root slash to the published link, which used to prevent the installer from opening.
+func TestPluginLinkAcceptsWindowsRootSlash(t *testing.T) {
+	for _, repository := range []string{"waygu-music-plugin/netease", "listener/library"} {
+		for _, path := range []string{"", "/"} {
+			raw := "wagyu-music://install-plugin" + path + "?repo=" + url.QueryEscape(repository)
+			a := newTestApp()
+			a.openPluginLink(raw, "wagyu-music")
+			if a.pluginLink.repo != repository || a.pluginLink.message != "" {
+				t.Fatalf("%q did not queue %q: %+v", raw, repository, a.pluginLink)
+			}
+		}
+	}
+}
+
+// A malformed installation link is reported before startup and cannot be used as an install candidate.
+func TestInvalidPluginLinkBeforeMainWindow(t *testing.T) {
+	for _, raw := range []string{
+		"wagyu-music://install-plugin//?repo=listener/library",
+		"wagyu-music://install-plugin/%2F?repo=listener/library",
+		"wagyu-music://install-plugin/?repo=listener%ZZlibrary",
+		"wagyu-music://install-plugin/?repo=listener/library&repo=listener/other",
+	} {
+		a := newTestApp()
+		a.openPluginLink(raw, "wagyu-music")
+		if a.pluginLink.message == "" || a.pluginLink.repo != "" {
+			t.Fatalf("%q did not queue only an error: %+v", raw, a.pluginLink)
+		}
+	}
+}
 
 // The browser can queue a repository during launch, and an extra untrusted URI parameter cannot replace it.
 func TestPluginLinkBeforeMainWindow(t *testing.T) {

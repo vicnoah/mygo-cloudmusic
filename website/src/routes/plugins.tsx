@@ -3,6 +3,7 @@ import { For, Show, createMemo, createSignal } from 'solid-js'
 import { Layout } from '../components/Layout'
 import { GitHubMark, Icon } from '../components/Icon'
 import snapshot from '../plugin-directory.json'
+import { release } from '../site'
 
 export const Route = createFileRoute('/plugins')({
   head: () => ({
@@ -17,6 +18,8 @@ export const Route = createFileRoute('/plugins')({
 type Plugin = (typeof snapshot)[number]
 const fnmusic = 'https://github.com/waygu-music-plugin/fnmusic'
 const github = 'https://github.com/'
+const minimumWebInstallVersion = '0.2.31'
+const webInstallAvailable = release.tag_name.replace(/^v/, '').localeCompare(minimumWebInstallVersion, 'en', { numeric: true }) >= 0
 const platformNames: Record<string, string> = { darwin: 'macOS', windows: 'Windows', linux: 'Linux' }
 const descriptions: Record<string, string> = {
   'waygu-music-plugin/fnmusic': '连接飞牛自建音乐库，浏览文件夹、专辑与歌手。',
@@ -63,7 +66,10 @@ function Plugins() {
           <div class="plugins-directory-head">
             <div>
               <h2 id="directory-title">插件目录</h2>
-              <p>在网页选择插件，再到肥牛音乐中确认安装。<Link to="/download">下载客户端</Link></p>
+              <p>
+                {webInstallAvailable ? '在网页选择插件，再到肥牛音乐中确认安装。' : '网页安装将在修正版恢复。可在桌面端的「插件管理」中安装官方插件。'}
+                <Link to="/download">下载客户端</Link>
+              </p>
             </div>
             <label class="plugins-search">
               <Icon name="search" size={17} />
@@ -75,7 +81,9 @@ function Plugins() {
               <For each={filtered()}>{(plugin) => <PluginCard plugin={plugin} />}</For>
             </div>
           </Show>
-          <p class="plugins-help">网页安装需要肥牛音乐 0.2.30 或更新版本。升级后先启动一次客户端。也可以在「插件管理」中按名称安装官方插件。</p>
+          <Show when={webInstallAvailable}>
+            <p class="plugins-help">网页安装需要肥牛音乐 {minimumWebInstallVersion} 或更新版本。升级后先启动一次客户端。也可以在「插件管理」中按名称安装官方插件。</p>
+          </Show>
         </section>
         <section class="plugins-publish" aria-labelledby="publish-title">
           <h2 id="publish-title">发布你的插件</h2>
@@ -115,13 +123,15 @@ function PluginCard(props: { plugin: Plugin }) {
       <Show when={compatibility(plugin).length > 0}>
         <ul class="plugins-targets" aria-label="支持的系统和架构"><For each={compatibility(plugin)}>{(label) => <li>{label}</li>}</For></ul>
       </Show>
-      <div class="plugins-card-action">
-        <Show when={!plugin.bundled} fallback={<span class="plugins-bundled">随宿主提供</span>}>
-          <a class="btn btn-primary" href={deepLink(plugin.repo)} aria-label={`在肥牛音乐中安装 ${plugin.name}`}>
-            <Icon name="download" size={16} />在肥牛音乐中安装
-          </a>
-        </Show>
-      </div>
+      <Show when={plugin.bundled || webInstallAvailable}>
+        <div class="plugins-card-action">
+          <Show when={!plugin.bundled} fallback={<span class="plugins-bundled">随宿主提供</span>}>
+            <a class="btn btn-primary" href={deepLink(plugin.repo)} aria-label={`在肥牛音乐中安装 ${plugin.name}`}>
+              <Icon name="download" size={16} />在肥牛音乐中安装
+            </a>
+          </Show>
+        </div>
+      </Show>
     </article>
   )
 }

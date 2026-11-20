@@ -25,36 +25,54 @@ type pluginLinkInstaller struct {
 	review        pluginregistry.GitHubReview
 }
 
+var errNotPluginLink = errors.New("not a plugin install link")
+var errInvalidPluginLink = errors.New("invalid plugin install link")
+
 func pluginLinkRepository(raw, scheme string) (string, error) {
+	prefix := scheme + "://install-plugin"
+	if len(raw) < len(prefix) || !strings.EqualFold(raw[:len(prefix)], prefix) ||
+		len(raw) > len(prefix) && !strings.ContainsRune("/?#", rune(raw[len(prefix)])) {
+		return "", errNotPluginLink
+	}
 	if len(raw) > 512 {
-		return "", errors.New("invalid plugin link")
+		return "", errInvalidPluginLink
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != scheme || u.Host != "install-plugin" ||
-		u.Path != "" || u.User != nil || u.Fragment != "" {
-		return "", errors.New("invalid plugin link")
+	if err != nil || u.Scheme != scheme || !strings.EqualFold(u.Host, "install-plugin") ||
+		u.User != nil || u.Fragment != "" {
+		return "", errInvalidPluginLink
+	}
+	// Windows can add a root slash when handing the browser's URI to the app.
+	if path := u.EscapedPath(); path != "" && path != "/" {
+		return "", errInvalidPluginLink
 	}
 	query, err := url.ParseQuery(u.RawQuery)
 	if err != nil || len(query) != 1 || len(query["repo"]) != 1 {
-		return "", errors.New("invalid plugin link")
+		return "", errInvalidPluginLink
 	}
 	return pluginregistry.GitHubRepository(query.Get("repo"))
 }
 
 func (a *app) openPluginLink(raw, scheme string) {
 	repo, err := pluginLinkRepository(raw, scheme)
-	if err != nil || a.quitting {
+	if err == errNotPluginLink || a.quitting {
 		return
 	}
+	message := ""
+	if err != nil {
+		message = "无法识别此插件安装链接。请从官网插件目录重新打开，或检查仓库地址。"
+	}
 	if a.win == nil {
-		a.pluginLink.repo = repo
+		if repo != "" || a.pluginLink.repo == "" {
+			a.pluginLink.repo, a.pluginLink.message = repo, message
+		}
 		return
 	}
 	if a.pluginLink.open && a.pluginLink.repo == repo {
 		a.openPluginManager()
 		return
 	}
-	a.reviewPluginLink(repo)
+	a.reviewPluginLink(repo, message)
 }
 
 func (a *app) closePluginLink() {
@@ -64,7 +82,7 @@ func (a *app) closePluginLink() {
 	a.pluginLink = pluginLinkInstaller{}
 }
 
-func (a *app) reviewPluginLink(repo string) {
+func (a *app) reviewPluginLink(repo, message string) {
 	if a.platformID == "" {
 		a.cancelLocalRequest()
 	}
@@ -72,7 +90,11 @@ func (a *app) reviewPluginLink(repo string) {
 	mygo.App.Focus()
 	a.closePluginLink()
 	a.pluginSource = pluginSourceEditor{}
-	a.pluginLink = pluginLinkInstaller{open: true, repo: repo}
+	a.pluginLink = pluginLinkInstaller{open: true, repo: repo, message: message}
+	if message != "" {
+		a.redraw()
+		return
+	}
 	if repo == platformcatalog.BundledRepository {
 		a.pluginLink.message = "飞牛音乐已随宿主提供，可在插件管理中启用。"
 		a.redraw()
@@ -170,7 +192,9 @@ func (a *app) pluginLinkDialog(c *ui.Context, p pluginManagerColors, width float
 		panel.Width(min(468, width-40)).Padding(22).Radius(14).Gap(11).Background(p.panel).
 			Border(1, p.border).Shadow(0, 14, 36, -6, ui.RGBA(0, 0, 0, 0.25))
 		ui.Text(c, "从 GitHub 安装插件").FontSize(19).FontWeight(700)
-		ui.Text(c, d.repo).FontSize(13).TextColor(p.muted).Wrap()
+		if d.repo != "" {
+			ui.Text(c, d.repo).FontSize(13).TextColor(p.muted).Wrap()
+		}
 		review := d.review
 		switch {
 		case d.loading:
