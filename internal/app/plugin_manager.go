@@ -13,6 +13,7 @@ func (a *app) hasPluginManager() bool {
 }
 
 func (a *app) openPluginManager() {
+	a.dismissStartupNotice()
 	if a.pluginsWin != nil {
 		a.pluginsWin.Show()
 		a.pluginsWin.Focus()
@@ -32,6 +33,7 @@ func (a *app) openPluginManager() {
 		a.pluginSource = pluginSourceEditor{}
 		a.closePluginLink()
 		a.syncDock()
+		a.resumeStartupPlatform()
 	})
 	win.Focus()
 }
@@ -53,6 +55,7 @@ func (a *app) pluginManagerView(c *ui.Context) {
 	width, _ := c.Size()
 	ui.Scroll(c).Fill().Padding(22).Gap(16).Children(func() {
 		a.pluginManagerHeader(c, p)
+		a.pluginStartupRecovery(c, p)
 		ui.Column(c).FillWidth().Background(p.panel).Border(1, p.border).Radius(14).Padding(10).Gap(5).Children(func() {
 			for _, entry := range a.platformRegistrations {
 				if !a.hasPlatform(entry.ID) {
@@ -135,7 +138,8 @@ func (a *app) managedPluginRow(c *ui.Context, p pluginManagerColors, pkg *manage
 	for _, entry := range pkg.installed.Platforms {
 		if local := a.localPlugins[externalRegistration(pkg.id, entry).ID]; local != nil {
 			pending = pending || local.pending != nil
-			if local.entry.ID == id && local.startError != "" {
+			if local.entry.ID == id && local.startError != "" &&
+				(a.pluginStartup.failure == "" || a.pluginStartup.failed != id) {
 				message = local.startError
 			}
 		}

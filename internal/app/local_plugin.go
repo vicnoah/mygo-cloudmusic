@@ -87,6 +87,7 @@ func (a *app) startLocalPlugin(id pluginapi.ID) {
 		return
 	}
 	a.cancelLocalRequest()
+	starting := a.platformID == ""
 	dir, err := mygo.App.Path(mygo.PathUserData)
 	if err != nil {
 		a.showPluginError(local, err)
@@ -110,6 +111,10 @@ func (a *app) startLocalPlugin(id pluginapi.ID) {
 		return
 	}
 	local.startError = ""
+	if starting {
+		a.pluginStartup.failure = ""
+		a.scheduleStartupNotice(local, request)
+	}
 	a.redraw()
 	input := PluginPrepare{Settings: preferences, Tray: a.tray != nil || runtime.GOOS == "darwin",
 		Appearance: a.settings.Appearance, WindowIcon: desktopApplicationIcon()}
@@ -167,7 +172,10 @@ func (a *app) startLocalPlugin(id pluginapi.ID) {
 		}
 		activate := PluginAction{Action: "activate"}
 		mygo.RunOnMain(func() {
-			if err != nil || local.request != request || a.quitting || ctx.Err() != nil {
+			if err == nil {
+				err = ctx.Err()
+			}
+			if err != nil || local.request != request || a.quitting {
 				a.pluginActivations.Revoke(candidate.scope)
 				if err != nil && local.request == request && !a.quitting {
 					a.showPluginError(local, err)
@@ -190,18 +198,26 @@ func (a *app) startLocalPlugin(id pluginapi.ID) {
 				activate.DesktopLyrics = bridge.WireDesktopLyricsPrefs(a.desktopLyricsPrefs())
 			}
 			a.win.Hide()
+			a.syncDock()
 			local.pending = nil
 			committed = true
 		})
 		if committed {
-			go a.watchLocalPlugin(candidate, activate)
+			go a.watchLocalPlugin(candidate, activate, starting)
 		}
 	})
 }
 
-func (a *app) watchLocalPlugin(candidate *pluginProcess, activate PluginAction) {
+func (a *app) watchLocalPlugin(candidate *pluginProcess, activate PluginAction, starting bool) {
 	if _, err := candidate.windowAction(activate); err != nil {
-		mygo.RunOnMain(func() { a.processLost(candidate, err) })
+		mygo.RunOnMain(func() {
+			if starting && !a.quitting && candidate == a.remoteActive() {
+				a.commitPlatform("", false)
+				a.failPluginStartup(candidate.owner, err)
+				return
+			}
+			a.processLost(candidate, err)
+		})
 		return
 	}
 	<-candidate.transport.Done()
@@ -209,6 +225,7 @@ func (a *app) watchLocalPlugin(candidate *pluginProcess, activate PluginAction) 
 }
 
 func (a *app) cancelLocalRequest() {
+	a.dismissStartupNotice()
 	for _, local := range a.localPlugins {
 		if local.pending != nil {
 			local.request++
@@ -245,7 +262,9 @@ func (a *app) processLost(process *pluginProcess, err error) {
 func (a *app) showPluginError(local *localPlugin, err error) {
 	local.startError = "插件启动失败：" + err.Error()
 	a.catalogPackage = local.program.Identity.Package
-	if a.pluginsWin != nil {
+	if a.platformID == "" {
+		a.failPluginStartup(local.entry.ID, err)
+	} else if a.pluginsWin != nil {
 		a.pluginsWin.Invalidate()
 	} else if a.remoteActive() != nil {
 		a.openPluginManager()

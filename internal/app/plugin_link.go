@@ -50,6 +50,10 @@ func (a *app) openPluginLink(raw, scheme string) {
 		a.pluginLink.repo = repo
 		return
 	}
+	if a.pluginLink.open && a.pluginLink.repo == repo {
+		a.openPluginManager()
+		return
+	}
 	a.reviewPluginLink(repo)
 }
 
@@ -61,6 +65,9 @@ func (a *app) closePluginLink() {
 }
 
 func (a *app) reviewPluginLink(repo string) {
+	if a.platformID == "" {
+		a.cancelLocalRequest()
+	}
 	a.openPluginManager()
 	mygo.App.Focus()
 	a.closePluginLink()

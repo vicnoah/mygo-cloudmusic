@@ -174,6 +174,7 @@ func (a *app) commitPlatform(id appplatform.ID, persist bool) {
 	if a.platformID == id {
 		return
 	}
+	starting := a.platformID == ""
 	wasRemote := a.localPlugins[a.platformID] != nil
 	if a.pl != nil {
 		a.saveSession()
@@ -198,7 +199,11 @@ func (a *app) commitPlatform(id appplatform.ID, persist bool) {
 	if persist {
 		a.settings.Platform = string(id)
 	}
-	a.activatePlatformView()
+	a.pluginStartup.failure = ""
+	a.dismissStartupNotice()
+	if id != "" {
+		a.activatePlatformView()
+	}
 
 	if persist {
 		a.settings.save()
@@ -207,8 +212,8 @@ func (a *app) commitPlatform(id appplatform.ID, persist bool) {
 		a.syncPlatformWindows()
 		a.mountPlatformWindows()
 		a.setMenu()
-		a.platformReady(false)
-		if wasRemote && a.remoteActive() == nil {
+		a.platformReady(starting)
+		if id != "" && (starting || wasRemote) && a.remoteActive() == nil {
 			a.showMain()
 		}
 	}

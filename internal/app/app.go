@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -77,8 +78,23 @@ func (a *app) redraw() {
 }
 
 func (a *app) showMain() {
+	if a.quitting {
+		return
+	}
+	if a.pluginsWin != nil && a.pluginLink.open {
+		a.openPluginManager()
+		return
+	}
 	if remote := a.remoteActive(); remote != nil {
 		go func() { _, _ = remote.action("show") }()
+		return
+	}
+	if a.win != nil && a.platformID == "" {
+		if a.pluginsWin != nil || a.pluginStartup.failure != "" {
+			a.openPluginManager()
+		} else {
+			a.resumeStartupPlatform()
+		}
 		return
 	}
 	if a.win != nil {
@@ -138,6 +154,10 @@ func run(registrations []appplatform.Registration, managed bool) error {
 			}
 		}
 		mygo.App.OnOpenURL(func(raw string) { a.openPluginLink(raw, linkScheme) })
+		// Windows and Linux deliver command-line URLs after WhenReady.
+		for _, arg := range os.Args[1:] {
+			a.openPluginLink(arg, linkScheme)
+		}
 	}
 	mygo.App.WhenReady(func() {
 		a.settings = loadSettings(a.platformRegistrations...)
@@ -168,15 +188,15 @@ func run(registrations []appplatform.Registration, managed bool) error {
 			return
 		}
 		a.configurePlatformPlayer()
-		a.activatePlatformView()
-		options := a.windowOptions(appplatform.MainWindow)
-		a.win = mygo.NewWindow(options)
+		a.win = mygo.NewWindow(a.startupWindowOptions())
 		_ = a.win.SetIcon(desktopApplicationIcon())
 		a.measureCache()
-		a.syncPlatformWindows()
 		a.setMenu()
-		a.mountPlatformWindows()
-		a.platformReady(true)
+		if a.platformID != "" {
+			a.syncPlatformWindows()
+			a.mountPlatformWindows()
+			a.platformReady(true)
+		}
 		// From the menu bar alone, the Dock icon shows while the window
 		// does.
 		a.syncDock()
@@ -190,9 +210,8 @@ func run(registrations []appplatform.Registration, managed bool) error {
 		a.applyTray()
 		if repo := a.pluginLink.repo; repo != "" {
 			a.reviewPluginLink(repo)
-		}
-		if id := appplatform.ID(a.settings.Platform); a.localPlugins[id] != nil && a.localPlugins[id].program.Path != "" {
-			a.startLocalPlugin(id)
+		} else {
+			a.resumeStartupPlatform()
 		}
 		// Closing the window hides it: music plays on, and the Dock icon
 		// or the tray's brings it back. A Linux desktop without a tray

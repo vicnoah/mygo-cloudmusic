@@ -40,6 +40,7 @@ type appPlatformState struct {
 	catalogPackage        string
 	pluginSource          pluginSourceEditor
 	pluginLink            pluginLinkInstaller
+	pluginStartup         pluginStartup
 }
 
 type platformAuthority struct {
