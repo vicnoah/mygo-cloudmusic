@@ -19,4 +19,4 @@ macOS 产物是含 `.app` 的 ZIP，Linux 构建省去 Developer ID 签名及 Ap
 
 ## 稳定版
 
-提交源码及版本，推送 `v*` 标签。GitHub Actions 在 Ubuntu 上构建全部六个目标并上传到草稿。稳定版的更新清单使用 `MYGO_UPDATER_PRIVATE_KEY` 签名。验收后将草稿发布为最新稳定版。macOS 构建使用包含 `.app` 的归档。
+提交源码及版本，推送稳定版的 `v*` 标签。GitHub Actions 在 Ubuntu 上构建全部六个目标，使用 `MYGO_UPDATER_PRIVATE_KEY` 签名更新清单，上传完成后发布为最新稳定版。macOS 构建使用包含 `.app` 的归档。

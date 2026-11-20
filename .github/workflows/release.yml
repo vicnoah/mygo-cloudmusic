@@ -53,11 +53,13 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --clobber \
             ./*.zip ./*.exe ./*.tar.gz SHA256SUMS
           gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
-      - name: Cross-build and upload stable artifacts
+      - name: Publish stable release
         if: ${{ !contains(github.ref_name, '-alpha.') }}
         env:
           GH_TOKEN: ${{ github.token }}
           MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
         run: |
+          test "$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
           go tool mygo build -sign - -skip-dmg -skip-notarize -upload \
             -platform "darwin/amd64,darwin/arm64,windows/amd64,windows/arm64,linux/amd64,linux/arm64"
+          gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft=false --latest
