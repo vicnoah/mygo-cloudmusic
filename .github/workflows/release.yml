@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ["v*", "!v*-alpha.*"]
+    tags: ["v*"]
 
 permissions:
   contents: write
@@ -19,6 +19,8 @@ jobs:
         run: test "$GITHUB_REF_NAME" = "v$(jq -r .version mygo.json)"
       - name: Install NSIS
         run: sudo apt-get update && sudo apt-get install -y nsis
+      - name: Test the host
+        run: GOWORK=off go test -mod=readonly ./...
       - name: Prepare the draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -29,10 +31,30 @@ jobs:
           ' CHANGELOG.md | sed '/./,$!d' > "$RUNNER_TEMP/notes.md"
           test -s "$RUNNER_TEMP/notes.md"
           if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            flags=()
+            if [[ $GITHUB_REF_NAME == *-alpha.* ]]; then
+              flags=(--prerelease --latest=false)
+              printf '\nmacOS 提供包含 .app 的 ZIP，由 Ubuntu 交叉构建。此 Alpha 的 macOS 产物未公证。\n' >> "$RUNNER_TEMP/notes.md"
+            fi
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --draft --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"
+              --draft --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"
           fi
-      - name: Cross-build and upload
+      - name: Publish Alpha
+        if: contains(github.ref_name, '-alpha.')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/waygu-music-plugin/registry/main/catalog.json \
+            | jq -e '.Format == 1 and (.Packages | length == 4)'
+          bash scripts/build-alpha.sh "$RUNNER_TEMP/alpha-assets"
+          cd "$RUNNER_TEMP/alpha-assets"
+          sha256sum -c SHA256SUMS
+          test "$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
+          gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --clobber \
+            ./*.zip ./*.exe ./*.tar.gz SHA256SUMS
+          gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
+      - name: Cross-build and upload stable artifacts
+        if: ${{ !contains(github.ref_name, '-alpha.') }}
         env:
           GH_TOKEN: ${{ github.token }}
           MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
