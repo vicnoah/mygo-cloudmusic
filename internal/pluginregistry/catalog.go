@@ -34,8 +34,9 @@ type CatalogEntry struct {
 }
 
 type Source struct {
-	Catalog string
-	Package string
+	Catalog        string
+	Package        string
+	UseGitHubProxy bool
 	// TrustedKey pins the publisher when its key is already known.
 	TrustedKey ed25519.PublicKey
 }
@@ -66,7 +67,7 @@ func (s Source) lookup(ctx context.Context, client *http.Client) (CatalogEntry, 
 		return CatalogEntry{}, errors.New("invalid plugin source")
 	}
 	var catalog Catalog
-	if err := getJSON(ctx, client, s.Catalog, &catalog); err != nil {
+	if err := getJSON(ctx, client, s.Catalog, s.UseGitHubProxy, &catalog); err != nil {
 		return CatalogEntry{}, err
 	}
 	if catalog.Format != 1 {
@@ -97,9 +98,9 @@ func (s Source) lookup(ctx context.Context, client *http.Client) (CatalogEntry, 
 	return selected, nil
 }
 
-func (e CatalogEntry) release(ctx context.Context, client *http.Client) (Release, error) {
+func (e CatalogEntry) release(ctx context.Context, client *http.Client, useGitHubProxy bool) (Release, error) {
 	var signed SignedManifest
-	if err := getJSON(ctx, client, e.Manifest, &signed); err != nil {
+	if err := getJSON(ctx, client, e.Manifest, useGitHubProxy, &signed); err != nil {
 		return Release{}, err
 	}
 	if !ed25519.Verify(e.PublicKey, signed.Manifest, signed.Signature) {
@@ -154,8 +155,8 @@ func checksum(value string) ([32]byte, error) {
 	return [32]byte(b), nil
 }
 
-func getJSON(ctx context.Context, client *http.Client, raw string, dst any) error {
-	response, err := get(ctx, client, raw)
+func getJSON(ctx context.Context, client *http.Client, raw string, useGitHubProxy bool, dst any) error {
+	response, err := get(ctx, client, raw, useGitHubProxy)
 	if err != nil {
 		return err
 	}
@@ -170,12 +171,17 @@ func getJSON(ctx context.Context, client *http.Client, raw string, dst any) erro
 	return json.Unmarshal(b, dst)
 }
 
-func get(ctx context.Context, client *http.Client, raw string) (*http.Response, error) {
+func get(ctx context.Context, client *http.Client, raw string, useGitHubProxy bool) (*http.Response, error) {
 	u, err := url.Parse(raw)
 	if err != nil || !allowedURL(u) {
 		return nil, errors.New("plugin source must use an HTTPS URL")
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	u.Fragment = ""
+	requestURL := u.String()
+	if useGitHubProxy && githubDownload(u) {
+		requestURL = "https://gh-proxy.com/" + requestURL
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +207,14 @@ func get(ctx context.Context, client *http.Client, raw string) (*http.Response, 
 }
 
 func allowedURL(u *url.URL) bool { return u.Scheme == "https" && u.Host != "" && u.User == nil }
+
+func githubDownload(u *url.URL) bool {
+	switch strings.ToLower(u.Host) {
+	case "github.com", "raw.githubusercontent.com", "raw.github.com", "api.github.com":
+		return true
+	}
+	return false
+}
 
 func safeID(s string) bool {
 	if s == "" || len(s) > 96 || !filepath.IsLocal(s) || strings.HasPrefix(s, ".") || strings.HasSuffix(s, ".") {

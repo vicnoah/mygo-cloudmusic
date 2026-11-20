@@ -251,7 +251,9 @@ func (a *app) pluginPackageActions(c *ui.Context, p pluginManagerColors, local *
 		}
 		ui.Text(c, source).Grow(1).MinWidth(0).SingleLine().FontSize(12).TextColor(p.muted)
 		if ui.Button(c, "来源设置…").Disabled(disabled).Clicked() {
-			a.pluginSource = pluginSourceEditor{open: true, local: local, draft: local.catalog}
+			a.pluginSource = pluginSourceEditor{
+				open: true, local: local, draft: local.catalog, useGitHubProxy: !a.settings.DisablePluginGitHubProxy,
+			}
 		}
 	})
 	ui.Row(c).FillWidth().Gap(7).Children(func() {
@@ -273,10 +275,11 @@ func (a *app) pluginPackageActions(c *ui.Context, p pluginManagerColors, local *
 }
 
 type pluginSourceEditor struct {
-	open    bool
-	local   *localPlugin
-	draft   string
-	message string
+	open           bool
+	local          *localPlugin
+	draft          string
+	useGitHubProxy bool
+	message        string
 }
 
 func (a *app) pluginSourceDialog(c *ui.Context, p pluginManagerColors, width float32) {
@@ -293,6 +296,13 @@ func (a *app) pluginSourceDialog(c *ui.Context, p pluginManagerColors, width flo
 			ui.Text(c, "插件目录 URL").FontSize(12).FontWeight(600)
 			ui.TextInput(c.Key("catalog"), &editor.draft).Label("插件目录 URL").Placeholder("https://…/catalog.json").AutoFocus()
 		})
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(12).Padding(10, 12).Radius(8).Background(p.row).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
+				ui.Text(c, "GitHub 下载加速").FontSize(13).FontWeight(600)
+				ui.Text(c, "通过 gh-proxy.com 获取所有插件的 GitHub 目录、清单和安装包。").FontSize(11).TextColor(p.muted).Wrap()
+			})
+			ui.Switch(c.Key("github-proxy"), &editor.useGitHubProxy).Shrink(0).Label("启用 GitHub 下载加速")
+		})
 		if editor.message != "" {
 			ui.Text(c, editor.message).FontSize(12).TextColor(c.Theme().Danger).Wrap()
 		}
@@ -306,7 +316,11 @@ func (a *app) pluginSourceDialog(c *ui.Context, p pluginManagerColors, width flo
 			if ui.Button(c, "取消").Clicked() {
 				editor.open = false
 			}
-			if ui.PrimaryButton(c, "保存来源").Clicked() {
+			if ui.PrimaryButton(c, "保存").Clicked() {
+				if editor.local.catalog == "" && strings.TrimSpace(editor.draft) == "" {
+					a.commitPluginSource("")
+					return
+				}
 				if catalog, err := checkedPluginCatalog(editor.draft); err != nil {
 					editor.message = err.Error()
 				} else {

@@ -82,7 +82,7 @@ func (r *Registry) Install(ctx context.Context, source Source, probe func(contex
 	if installed && record.Key != keyID {
 		return Program{}, errors.New("plugin release is from a different source or key")
 	}
-	release, err := entryInfo.release(ctx, r.client)
+	release, err := entryInfo.release(ctx, r.client, source.UseGitHubProxy)
 	if err != nil {
 		return Program{}, err
 	}
@@ -103,7 +103,7 @@ func (r *Registry) Install(ctx context.Context, source Source, probe func(contex
 		return Program{}, err
 	}
 	defer os.RemoveAll(staging)
-	if err := r.download(ctx, artifact, filepath.Join(staging, "download.zip")); err != nil {
+	if err := r.download(ctx, artifact, source.UseGitHubProxy, filepath.Join(staging, "download.zip")); err != nil {
 		return Program{}, err
 	}
 	extracted := filepath.Join(staging, "files")
@@ -285,8 +285,8 @@ func (r *Registry) write(index map[string]Package) error {
 	return os.Rename(f.Name(), filepath.Join(r.dir, "index.json"))
 }
 
-func (r *Registry) download(ctx context.Context, artifact Artifact, dest string) error {
-	response, err := get(ctx, r.client, artifact.URL)
+func (r *Registry) download(ctx context.Context, artifact Artifact, useGitHubProxy bool, dest string) error {
+	response, err := get(ctx, r.client, artifact.URL, useGitHubProxy)
 	if err != nil {
 		return err
 	}

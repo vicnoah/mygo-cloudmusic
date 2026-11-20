@@ -102,11 +102,12 @@ func (a *app) commitPluginSource(catalog string) {
 	local := editor.local
 	pkg := local.program.Identity.Package
 	settings := a.settings
-	settings.PluginCatalogs = maps.Clone(settings.PluginCatalogs)
-	if settings.PluginCatalogs == nil {
-		settings.PluginCatalogs = make(map[string]pluginCatalogSettings)
-	}
-	if existing := settings.PluginCatalogs[pkg]; existing.URL != catalog || catalog == "" {
+	settings.DisablePluginGitHubProxy = !editor.useGitHubProxy
+	if local.catalog != catalog {
+		settings.PluginCatalogs = maps.Clone(settings.PluginCatalogs)
+		if settings.PluginCatalogs == nil {
+			settings.PluginCatalogs = make(map[string]pluginCatalogSettings)
+		}
 		settings.PluginCatalogs[pkg] = pluginCatalogSettings{URL: catalog}
 	}
 	if err := settings.save(); err != nil {
@@ -114,6 +115,7 @@ func (a *app) commitPluginSource(catalog string) {
 		return
 	}
 	a.settings.PluginCatalogs = settings.PluginCatalogs
+	a.settings.DisablePluginGitHubProxy = settings.DisablePluginGitHubProxy
 	local.catalog, local.message = catalog, ""
 	editor.open = false
 }
@@ -124,6 +126,7 @@ func (a *app) changeInstalledPlugin(local *localPlugin, action string) {
 	}
 	source := pluginregistry.Source{Package: local.program.Identity.Package}
 	if action == "install" {
+		source.UseGitHubProxy = !a.settings.DisablePluginGitHubProxy
 		var err error
 		source.Catalog, err = checkedPluginCatalog(local.catalog)
 		if err != nil {

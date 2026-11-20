@@ -76,7 +76,7 @@ func TestPluginManagerSourceEditorSavesSelectedPackage(t *testing.T) {
 		t.Fatal("the new source editor did not focus its URL field")
 	}
 	view.Type("https://repo.example/catalog.json")
-	click("保存来源")
+	click("保存")
 	data, err := os.ReadFile(a.settings.path)
 	if err != nil {
 		t.Fatalf("source was not saved: %v (%s)", err, a.pluginSource.message)
@@ -87,5 +87,53 @@ func TestPluginManagerSourceEditorSavesSelectedPackage(t *testing.T) {
 	}
 	if len(saved.PluginCatalogs) != 1 || saved.PluginCatalogs["second"] != (pluginCatalogSettings{URL: "https://repo.example/catalog.json"}) || a.pluginSource.open {
 		t.Fatalf("source edit did not save the selected package and close the dialog: %+v", saved.PluginCatalogs)
+	}
+}
+
+// Saving the proxy switch applies to every plugin, and cancelling leaves the stored choice intact.
+func TestPluginManagerProxyPreference(t *testing.T) {
+	a := newTestApp()
+	a.settings.path = filepath.Join(t.TempDir(), "settings.json")
+	registry, err := pluginregistry.New(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.localPlugins = make(map[pluginapi.ID]*localPlugin)
+	for _, id := range []string{"first", "second"} {
+		entry := testRegistration(pluginapi.ID(id), nil)
+		a.platformRegistrations = append(a.platformRegistrations, entry)
+		a.localPlugins[entry.ID] = &localPlugin{entry: entry, registry: registry, catalog: "https://repo.example/catalog.json",
+			program: platformrpc.Program{Identity: platformrpc.Identity{Package: id, Entry: id}}}
+	}
+	view := ui.NewTester(a.pluginManagerView, 810, 650)
+	click := func(label string) {
+		t.Helper()
+		if err := view.Click(label); err != nil {
+			t.Fatal(err)
+		}
+	}
+	click("来源设置…")
+	click("启用 GitHub 下载加速")
+	click("保存")
+	data, err := os.ReadFile(a.settings.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved settings
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if !saved.DisablePluginGitHubProxy || len(saved.PluginCatalogs) != 0 {
+		t.Fatal("saving the switch did not disable the proxy or overwrote a catalog")
+	}
+	click("管理 second")
+	click("来源设置…")
+	if a.pluginSource.useGitHubProxy {
+		t.Fatal("the other plugin did not inherit the disabled proxy preference")
+	}
+	click("启用 GitHub 下载加速")
+	click("取消")
+	if !a.settings.DisablePluginGitHubProxy {
+		t.Fatal("cancelling restored the proxy")
 	}
 }

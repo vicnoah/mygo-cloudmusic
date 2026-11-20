@@ -11,12 +11,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 // A catalog supplies the signing key for a first install, and failed upgrades preserve the installed release.
 func TestRegistryInstallUpdateAndRollback(t *testing.T) {
@@ -51,8 +56,11 @@ func TestRegistryInstallUpdateAndRollback(t *testing.T) {
 	var badProtocol atomic.Bool
 	var newPublisher, omitKey atomic.Bool
 	var manifestRequests atomic.Int32
+	const catalogURL = "https://raw.githubusercontent.com/example/plugins/main/catalog.json"
+	const releaseURL = "https://github.com/example/plugins/releases/download/v1/manifest.json"
+	const archiveURL = "https://github.com/example/plugins/releases/download/v1/archive.zip"
+	const proxy = "https://gh-proxy.com/"
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		base := "https://" + req.Host
 		version := latest.Load().(string)
 		switch req.URL.Path {
 		case "/catalog":
@@ -63,7 +71,7 @@ func TestRegistryInstallUpdateAndRollback(t *testing.T) {
 			if omitKey.Load() {
 				key = nil
 			}
-			_ = json.NewEncoder(w).Encode(Catalog{Format: 1, Packages: []CatalogEntry{{Package: "songloft", Manifest: base + "/release", PublicKey: key}}})
+			_ = json.NewEncoder(w).Encode(Catalog{Format: 1, Packages: []CatalogEntry{{Package: "songloft", Manifest: releaseURL, PublicKey: key}}})
 		case "/release":
 			manifestRequests.Add(1)
 			archive := versions[version]
@@ -74,7 +82,7 @@ func TestRegistryInstallUpdateAndRollback(t *testing.T) {
 			release, _ := json.Marshal(Release{
 				Format: 1, Protocol: protocolVersion, Package: "songloft", Version: version, Entries: []string{"songloft"},
 				Artifacts: []Artifact{{
-					OS: runtime.GOOS, Arch: runtime.GOARCH, URL: base + "/archive", Entry: executable,
+					OS: runtime.GOOS, Arch: runtime.GOARCH, URL: archiveURL, Entry: executable,
 					Size: int64(len(archive)), SHA256: fmt.Sprintf("%x", sha256.Sum256(archive)),
 					EntrySHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(version))),
 				}},
@@ -95,11 +103,35 @@ func TestRegistryInstallUpdateAndRollback(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	registry, err := New(t.TempDir(), server.Client())
+	client := *server.Client()
+	wantProxy := true
+	paths := map[string]string{catalogURL: "/catalog", releaseURL: "/release", archiveURL: "/archive"}
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requested := req.URL.String()
+		for raw, path := range paths {
+			expected := raw
+			if wantProxy {
+				expected = proxy + raw
+			}
+			if requested != expected {
+				continue
+			}
+			local, err := url.Parse(server.URL + path)
+			if err != nil {
+				return nil, err
+			}
+			req = req.Clone(req.Context())
+			req.URL, req.Host = local, local.Host
+			return server.Client().Transport.RoundTrip(req)
+		}
+		t.Errorf("unexpected request with proxy enabled=%t: %s", wantProxy, requested)
+		return nil, errors.New("unexpected plugin download URL")
+	})
+	registry, err := New(t.TempDir(), &client)
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := Source{Catalog: server.URL + "/catalog", Package: "songloft"}
+	source := Source{Catalog: catalogURL, Package: "songloft", UseGitHubProxy: true}
 	probe := func(_ context.Context, p Program) error {
 		b, err := os.ReadFile(p.Path)
 		if err != nil {
@@ -129,6 +161,7 @@ func TestRegistryInstallUpdateAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireInstalled("1.0")
+	wantProxy, source.UseGitHubProxy = false, false // A direct update must keep the original source of the proxied install.
 	latest.Store("1.1")
 	before := manifestRequests.Load()
 	newPublisher.Store(true)
@@ -178,4 +211,20 @@ func TestRegistryInstallUpdateAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireInstalled("1.0")
+}
+
+// Enabling GitHub acceleration leaves a separately hosted catalog on its original server.
+func TestGitHubProxyLeavesOtherSitesDirect(t *testing.T) {
+	const origin = "https://github.com.example.invalid/catalog.json"
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if got := req.URL.String(); got != origin {
+			t.Errorf("custom catalog was requested from %s", got)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+	})}
+	response, err := get(t.Context(), client, origin, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
 }
