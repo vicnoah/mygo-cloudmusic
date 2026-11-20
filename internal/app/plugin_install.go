@@ -228,6 +228,10 @@ func (a *app) commitPluginSource(catalog string) {
 }
 
 func (a *app) changeInstalledPlugin(pkg *managedPlugin, action string) {
+	a.changePlugin(pkg, action, nil)
+}
+
+func (a *app) changePlugin(pkg *managedPlugin, action string, reviewed *pluginregistry.Source) {
 	if pkg == nil || a.pluginRegistry == nil || pkg.busy {
 		return
 	}
@@ -237,7 +241,13 @@ func (a *app) changeInstalledPlugin(pkg *managedPlugin, action string) {
 		}
 	}
 	source := pluginregistry.Source{Package: pkg.id, Catalog: pkg.source, UseGitHubProxy: !a.settings.DisablePluginGitHubProxy}
-	if action == "install" {
+	if reviewed != nil {
+		if reviewed.Catalog != pkg.source || reviewed.Package != pkg.id {
+			return
+		}
+		source = *reviewed
+		source.UseGitHubProxy = !a.settings.DisablePluginGitHubProxy
+	} else if action == "install" {
 		pinned := ""
 		if source.Catalog == platformcatalog.OfficialCatalog {
 			pinned = platformcatalog.OfficialPublisherKey

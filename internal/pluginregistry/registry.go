@@ -111,7 +111,7 @@ func (r *Registry) Install(ctx context.Context, source Source, probe func(contex
 	if installed && record.Key != keyID {
 		return Program{}, errors.New("plugin release is from a different source or key")
 	}
-	release, err := entryInfo.release(ctx, r.client, source.UseGitHubProxy)
+	release, err := source.checkedRelease(ctx, r.client, entryInfo)
 	if err != nil {
 		return Program{}, err
 	}

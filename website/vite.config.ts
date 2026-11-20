@@ -2,6 +2,8 @@ import { defineConfig } from 'vite'
 import { tanstackStart } from '@tanstack/solid-start/plugin/vite'
 import solid from 'vite-plugin-solid'
 
+declare const process: { env: Record<string, string | undefined> }
+
 // The latest release, with its installers, for the download page to link
 // to. It's fetched once, as the site is built: a release that is published
 // later is linked to once the site is built again. GH_TOKEN or GITHUB_TOKEN,
@@ -21,6 +23,7 @@ async function latestRelease() {
 }
 
 export default defineConfig(async () => ({
+  base: (process.env.SITE_BASE_PATH ?? '').replace(/\/+$/, '') + '/',
   define: { __RELEASE__: JSON.stringify(await latestRelease()) },
   plugins: [
     // Every page is rendered at build time, so the site is plain files

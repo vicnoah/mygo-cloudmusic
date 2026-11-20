@@ -30,6 +30,7 @@ func (a *app) openPluginManager() {
 	win.OnClosed(func() {
 		a.pluginsWin = nil
 		a.pluginSource = pluginSourceEditor{}
+		a.closePluginLink()
 		a.syncDock()
 	})
 	win.Focus()
@@ -81,6 +82,7 @@ func (a *app) pluginManagerView(c *ui.Context) {
 		}
 	})
 	a.pluginSourceDialog(c, p, width)
+	a.pluginLinkDialog(c, p, width)
 }
 
 type pluginManagerColors struct {

@@ -39,6 +39,7 @@ type appPlatformState struct {
 	pluginWorkers         sync.WaitGroup
 	catalogPackage        string
 	pluginSource          pluginSourceEditor
+	pluginLink            pluginLinkInstaller
 }
 
 type platformAuthority struct {

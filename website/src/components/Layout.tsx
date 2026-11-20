@@ -32,6 +32,7 @@ function Header() {
           <span>{site.name}</span>
         </Link>
         <div class="nav-end">
+          <Link to="/plugins" class="nav-plugins" activeProps={{ 'aria-current': 'page' }}>插件</Link>
           <ThemeSwitch class="nav-theme" />
           <a class="icon-link" href={repo} aria-label="GitHub 上的源代码">
             <GitHubMark size={19} />

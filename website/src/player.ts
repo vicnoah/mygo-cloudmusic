@@ -4,7 +4,7 @@ import { createSignal } from 'solid-js'
 export const track = {
   title: '春日影',
   artist: 'MyGO!!!!!',
-  src: '/haruhikage.m4a',
+  src: import.meta.env.BASE_URL + 'haruhikage.m4a',
   duration: 281,
 }
 

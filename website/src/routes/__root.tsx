@@ -18,12 +18,12 @@ export const Route = createRootRoute({
       { property: 'og:type', content: 'website' },
       { property: 'og:title', content: site.title },
       { property: 'og:description', content: site.description },
-      { property: 'og:image', content: '/icon.png' },
+      { property: 'og:image', content: import.meta.env.BASE_URL + 'icon.png' },
       { name: 'twitter:card', content: 'summary' },
     ],
     links: [
-      { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
-      { rel: 'apple-touch-icon', href: '/icon.png' },
+      { rel: 'icon', href: import.meta.env.BASE_URL + 'favicon.svg', type: 'image/svg+xml' },
+      { rel: 'apple-touch-icon', href: import.meta.env.BASE_URL + 'icon.png' },
       { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
       { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossOrigin: 'anonymous' },
       {
@@ -43,14 +43,6 @@ function RootDocument(props: { children: JSX.Element }) {
       <head>
         <script innerHTML={themeScript} />
         <HydrationScript />
-        {/* Analytics, only on the built site, so visits to the dev server aren't counted. */}
-        {import.meta.env.PROD && (
-          <script
-            defer
-            src="https://u.egoist.dev/script.js"
-            data-website-id="e2a744e5-3326-41e2-8ff3-1a5e80bcc4ac"
-          />
-        )}
       </head>
       <body>
         <HeadContent />

@@ -15,3 +15,9 @@
 | 网易云音乐 | [waygu-music-plugin/netease](https://github.com/waygu-music-plugin/netease) |
 | QQ 音乐 | [waygu-music-plugin/qqmusic](https://github.com/waygu-music-plugin/qqmusic) |
 | 官方目录及构建工具 | [waygu-music-plugin/registry](https://github.com/waygu-music-plugin/registry) |
+
+## 收录到网站
+
+把插件放在公开的 GitHub 仓库，添加话题 `wagyu-music-plugin`。最新正式版带上 `catalog.json`、签名的 `manifest.json` 和目标系统的 ZIP 包。每个仓库发布一个插件包。包 ID 在宿主中标识已安装的插件，建议用作者名作为前缀。GitHub Actions 会验证符合格式的发行并更新[网站目录](https://vicnoah.github.io/mygo-cloudmusic/plugins/)。
+
+插件采用 Go 编写，包括业务逻辑和完整的原生界面。开发者可从飞牛音乐的窗口和适配器入手。外置插件的入口使用 SDK 的 `desktop.RunPlatformPlugin`，由宿主在用户确认后启动。[飞牛音乐源码](https://github.com/waygu-music-plugin/fnmusic)

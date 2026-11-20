@@ -1,0 +1,151 @@
+[
+  {
+    "repo": "waygu-music-plugin/qqmusic",
+    "name": "QQ 音乐",
+    "description": "QQ Music platform plugin for Wagyu Music",
+    "avatar": "https://avatars.githubusercontent.com/u/359173769?v=4",
+    "stars": 0,
+    "official": true,
+    "version": "0.1.1",
+    "targets": [
+      {
+        "os": "windows",
+        "arch": "amd64"
+      },
+      {
+        "os": "windows",
+        "arch": "arm64"
+      },
+      {
+        "os": "darwin",
+        "arch": "amd64"
+      },
+      {
+        "os": "darwin",
+        "arch": "arm64"
+      },
+      {
+        "os": "linux",
+        "arch": "amd64"
+      },
+      {
+        "os": "linux",
+        "arch": "arm64"
+      }
+    ]
+  },
+  {
+    "repo": "waygu-music-plugin/subsonic",
+    "name": "Subsonic",
+    "description": "Subsonic-compatible platform plugin for Wagyu Music",
+    "avatar": "https://avatars.githubusercontent.com/u/359173769?v=4",
+    "stars": 0,
+    "official": true,
+    "version": "0.1.1",
+    "targets": [
+      {
+        "os": "windows",
+        "arch": "amd64"
+      },
+      {
+        "os": "windows",
+        "arch": "arm64"
+      },
+      {
+        "os": "darwin",
+        "arch": "amd64"
+      },
+      {
+        "os": "darwin",
+        "arch": "arm64"
+      },
+      {
+        "os": "linux",
+        "arch": "amd64"
+      },
+      {
+        "os": "linux",
+        "arch": "arm64"
+      }
+    ]
+  },
+  {
+    "repo": "waygu-music-plugin/netease",
+    "name": "网易云音乐",
+    "description": "NetEase Cloud Music platform plugin for Wagyu Music",
+    "avatar": "https://avatars.githubusercontent.com/u/359173769?v=4",
+    "stars": 0,
+    "official": true,
+    "version": "0.1.1",
+    "targets": [
+      {
+        "os": "windows",
+        "arch": "amd64"
+      },
+      {
+        "os": "windows",
+        "arch": "arm64"
+      },
+      {
+        "os": "darwin",
+        "arch": "amd64"
+      },
+      {
+        "os": "darwin",
+        "arch": "arm64"
+      },
+      {
+        "os": "linux",
+        "arch": "amd64"
+      },
+      {
+        "os": "linux",
+        "arch": "arm64"
+      }
+    ]
+  },
+  {
+    "repo": "waygu-music-plugin/fnmusic",
+    "name": "飞牛音乐",
+    "description": "Wagyu Music built-in FN Music platform",
+    "avatar": "https://avatars.githubusercontent.com/u/359173769?v=4",
+    "stars": 0,
+    "official": true,
+    "bundled": true
+  },
+  {
+    "repo": "waygu-music-plugin/songloft",
+    "name": "Songloft",
+    "description": "Songloft platform plugin for Wagyu Music",
+    "avatar": "https://avatars.githubusercontent.com/u/359173769?v=4",
+    "stars": 0,
+    "official": true,
+    "version": "0.1.1",
+    "targets": [
+      {
+        "os": "windows",
+        "arch": "amd64"
+      },
+      {
+        "os": "windows",
+        "arch": "arm64"
+      },
+      {
+        "os": "darwin",
+        "arch": "amd64"
+      },
+      {
+        "os": "darwin",
+        "arch": "arm64"
+      },
+      {
+        "os": "linux",
+        "arch": "amd64"
+      },
+      {
+        "os": "linux",
+        "arch": "arm64"
+      }
+    ]
+  }
+]

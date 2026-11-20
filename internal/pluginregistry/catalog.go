@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -40,6 +41,10 @@ type Source struct {
 	UseGitHubProxy bool
 	// TrustedKey pins the publisher when its key is already known.
 	TrustedKey ed25519.PublicKey
+	// GitHubRepo restricts the release and its artifacts to this repository.
+	GitHubRepo string
+	// ReviewedManifest binds installation to the exact release shown for confirmation.
+	ReviewedManifest [sha256.Size]byte
 }
 
 type SignedManifest struct {
@@ -54,6 +59,7 @@ type Release struct {
 	Name             string `json:",omitempty"`
 	Entries          []string
 	Artifacts        []Artifact
+	manifestHash     [sha256.Size]byte
 }
 
 type Artifact struct {
@@ -82,16 +88,20 @@ func (s Source) lookup(ctx context.Context, client *http.Client) (CatalogEntry, 
 	if selected.Manifest == "" {
 		return CatalogEntry{}, errors.New("package not found in plugin catalog")
 	}
-	if len(selected.PublicKey) == 0 {
-		selected.PublicKey = s.TrustedKey
+	return selected.withPublisher(s.TrustedKey)
+}
+
+func (e CatalogEntry) withPublisher(key ed25519.PublicKey) (CatalogEntry, error) {
+	if len(e.PublicKey) == 0 {
+		e.PublicKey = key
 	}
-	if len(selected.PublicKey) != ed25519.PublicKeySize {
+	if len(e.PublicKey) != ed25519.PublicKeySize {
 		return CatalogEntry{}, errors.New("plugin catalog is missing a valid publisher key")
 	}
-	if len(s.TrustedKey) != 0 && !bytes.Equal(s.TrustedKey, selected.PublicKey) {
+	if len(key) != 0 && !bytes.Equal(key, e.PublicKey) {
 		return CatalogEntry{}, errors.New("plugin release is from a different source or key")
 	}
-	return selected, nil
+	return e, nil
 }
 
 func readCatalog(ctx context.Context, client *http.Client, raw string, useProxy bool) (Catalog, error) {
@@ -136,6 +146,7 @@ func (e CatalogEntry) release(ctx context.Context, client *http.Client, useGitHu
 			return Release{}, errors.New("invalid plugin entry ID")
 		}
 	}
+	release.manifestHash = sha256.Sum256(signed.Manifest)
 	return release, nil
 }
 

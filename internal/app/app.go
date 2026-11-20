@@ -124,6 +124,16 @@ func run(registrations []appplatform.Registration, managed bool) error {
 	var startupErr error
 	moveOldData()
 	a.useUpdater()
+	linkScheme := "wagyu-music"
+	if managed {
+		if mygo.IsDev() {
+			linkScheme += "-dev"
+			if err := mygo.App.RegisterURLScheme(linkScheme); err != nil {
+				log.Print(err)
+			}
+		}
+		mygo.App.OnOpenURL(func(raw string) { a.openPluginLink(raw, linkScheme) })
+	}
 	mygo.App.WhenReady(func() {
 		a.settings = loadSettings(a.platformRegistrations...)
 		a.loadPluginRegistry()
@@ -173,6 +183,9 @@ func run(registrations []appplatform.Registration, managed bool) error {
 			}
 		})
 		a.applyTray()
+		if repo := a.pluginLink.repo; repo != "" {
+			a.reviewPluginLink(repo)
+		}
 		if id := appplatform.ID(a.settings.Platform); a.localPlugins[id] != nil && a.localPlugins[id].program.Path != "" {
 			a.startLocalPlugin(id)
 		}
@@ -222,7 +235,16 @@ func run(registrations []appplatform.Registration, managed bool) error {
 	// The Dock icon's click, and the launch another instance handed over
 	// above, as the shortcut's while the window hides in the tray.
 	mygo.App.OnActivate(func(bool) { a.showMain() })
-	mygo.App.OnSecondInstance(func([]string, string) { a.showMain() })
+	mygo.App.OnSecondInstance(func(args []string, _ string) {
+		if managed {
+			for _, arg := range args {
+				if _, err := pluginLinkRepository(arg, linkScheme); err == nil {
+					return // OnOpenURL focuses the plugin manager.
+				}
+			}
+		}
+		a.showMain()
+	})
 	err := mygo.App.Run()
 	if a.pl != nil {
 		a.pl.Close()
