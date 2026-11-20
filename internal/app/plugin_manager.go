@@ -19,7 +19,7 @@ func (a *app) openPluginManager() {
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title: "插件管理", Width: 810, Height: 650, MinWidth: 510, MinHeight: 500,
+		Title: "插件管理", Width: 660, Height: 485, MinWidth: 480, MinHeight: 380,
 		Content: ui.View(a.pluginManagerView),
 	})
 	a.pluginsWin = win
