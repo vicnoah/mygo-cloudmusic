@@ -3,7 +3,9 @@ package mpv
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,58 +76,73 @@ type cLogMessage struct {
 	LogLevel uint32
 }
 
+type componentLibrary struct {
+	path  string
+	files []componentFile
+}
+
+func (library componentLibrary) matches(other componentLibrary) bool {
+	return library.path != "" && other.path != "" &&
+		filepath.Base(library.path) == filepath.Base(other.path) &&
+		slices.Equal(library.files, other.files)
+}
+
 var (
-	loadMu        sync.Mutex
-	installedPath string
-	loadedPath    string
-	loadFailed    bool
-	loadDisabled  bool
-	mpvLib        cFuncs
+	loadMu       sync.Mutex
+	installed    componentLibrary
+	mapped       componentLibrary
+	loadFailed   bool
+	loadDisabled bool
+	mpvLib       cFuncs
 )
 
-// Ready is set after a downloaded component passes the initialization probe.
+// Ready reports whether a verified component can be enabled in this process.
 func Ready() bool {
 	loadMu.Lock()
 	defer loadMu.Unlock()
-	return installedPath != "" && !loadFailed && !loadDisabled
+	return installed.path != "" && !loadFailed && !loadDisabled
 }
 
 // IsDownloaded reports whether a verified component is selected for this or the next process.
 func IsDownloaded() bool {
 	loadMu.Lock()
 	defer loadMu.Unlock()
-	return installedPath != ""
+	return installed.path != ""
 }
 
-// NeedsRestart reports whether a different installed version is already mapped in this process.
+// NeedsRestart reports whether the installed payload differs from the mapped library.
 func NeedsRestart() bool {
 	loadMu.Lock()
 	defer loadMu.Unlock()
-	return installedPath != "" && loadedPath != "" && installedPath != loadedPath
+	return installed.path != "" && mapped.path != "" && !installed.matches(mapped)
 }
 
-func setInstalledLibrary(path string) {
-	loadMu.Lock()
-	defer loadMu.Unlock()
-	installedPath, loadFailed = path, false
+// activateInstalled restores the mapped decoder when a reinstall verifies the same files.
+// Callers hold loadMu while publishing the new active record and updating readiness.
+func activateInstalled(path string, manifest componentManifest) {
+	installed = componentLibrary{path: path, files: manifest.Files}
+	loadFailed = false
+	if installed.matches(mapped) {
+		loadDisabled = false
+	}
 }
 
 // Load binds the official installed component and keeps that version mapped until exit.
 func Load() error {
 	loadMu.Lock()
 	defer loadMu.Unlock()
-	if installedPath == "" || loadDisabled {
+	if installed.path == "" || loadDisabled {
 		return ErrUnavailable
 	}
-	if loadedPath != "" {
+	if mapped.path != "" {
 		return nil
 	}
-	library, err := bindLibrary(installedPath)
+	library, err := bindLibrary(installed.path)
 	if err != nil {
 		loadFailed = true
 		return err
 	}
-	mpvLib, loadedPath = library, installedPath
+	mpvLib, mapped = library, installed
 	loadFailed = false
 	return nil
 }
@@ -203,9 +220,6 @@ func NewInstance(opts ...map[string]string) (*Instance, error) {
 	}
 	handle, err := initializeInstance(mpvLib, options)
 	if err != nil {
-		loadMu.Lock()
-		loadFailed = true
-		loadMu.Unlock()
 		return nil, err
 	}
 	return &Instance{handle: handle}, nil

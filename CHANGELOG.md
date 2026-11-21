@@ -1,5 +1,10 @@
 # 更新日志
 
+## 0.2.32-alpha.2
+
+- 修复 Windows、macOS 和 Linux 共用的 MPV 状态判断。删除后重新下载同一套已验证的组件，下载成功后可立即启用。已加载的组件有实际版本差异时，新版本在完全退出并重新打开应用后生效。
+- macOS 提供 Intel 和 Apple Silicon 的 DMG 与 ZIP。Linux 为 amd64 和 arm64 提供 DEB 与 tar.gz。
+
 ## 0.2.32-alpha.1
 
 - 高级解码组件改为独立安装整包。Windows、macOS 和 Linux 都只加载已验证的官方组件，未安装时继续普通播放。此前下载的单文件组件需在设置里重新下载。

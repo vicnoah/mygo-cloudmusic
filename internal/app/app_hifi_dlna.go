@@ -77,7 +77,7 @@ func (a *app) startMPVDownload() (protocol.DesktopTask, error) {
 			if err == nil {
 				a.syncMPVSettings()
 				if mpv.NeedsRestart() {
-					task.Message = "解码组件已下载，下次启动后使用新版本"
+					task.Message = "新版解码组件已安装，完全退出并重新打开应用后生效"
 				}
 			}
 			if err != nil {

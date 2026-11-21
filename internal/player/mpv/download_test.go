@@ -27,17 +27,19 @@ func withTestComponent(t *testing.T, index, archive []byte, key ed25519.PublicKe
 	}))
 	t.Cleanup(server.Close)
 	cache, base, public, probe := cacheDirOverride, baseDownloadURL, releaseKey, componentProbe
+	previousInstalled, previousMapped := installed, mapped
+	previousFailure, previousDisabled := loadFailed, loadDisabled
 	cacheDirOverride, baseDownloadURL, releaseKey = t.TempDir(), server.URL+"/", key
 	t.Cleanup(func() {
 		cacheDirOverride, baseDownloadURL, releaseKey, componentProbe = cache, base, public, probe
-		setInstalledLibrary("")
+		installed, mapped = previousInstalled, previousMapped
+		loadFailed, loadDisabled = previousFailure, previousDisabled
 	})
 }
 
-func signedFixture(t *testing.T) ([]byte, []byte, ed25519.PublicKey) {
+func signedFixture(t *testing.T, contents []byte) ([]byte, []byte, ed25519.PublicKey) {
 	t.Helper()
 	const entry = "fixture.dll"
-	contents := []byte("fixture library")
 	version := "1.0.0"
 	manifest := componentManifest{
 		Format: componentFormat, Version: version, MPVVersion: "0.41.0",
@@ -81,7 +83,7 @@ func signedFixture(t *testing.T) ([]byte, []byte, ed25519.PublicKey) {
 
 // Canceling a fully received component leaves the previous installation intact.
 func TestDownloadCanceledBeforePublish(t *testing.T) {
-	index, archive, key := signedFixture(t)
+	index, archive, key := signedFixture(t, []byte("fixture library"))
 	withTestComponent(t, index, archive, key)
 	componentProbe = func(ctx context.Context, _ string) error { return ctx.Err() }
 	if err := Download(t.Context(), nil); err != nil {
@@ -114,7 +116,7 @@ func TestDownloadCanceledBeforePublish(t *testing.T) {
 
 // A correctly downloaded archive remains unavailable when its native dependencies cannot load.
 func TestDownloadRetainsNativeProbeFailure(t *testing.T) {
-	index, archive, key := signedFixture(t)
+	index, archive, key := signedFixture(t, []byte("fixture library"))
 	withTestComponent(t, index, archive, key)
 	probeErr := errors.New("libass.so.9: cannot open shared object file")
 	componentProbe = func(_ context.Context, library string) error {
@@ -136,7 +138,7 @@ func TestDownloadRetainsNativeProbeFailure(t *testing.T) {
 
 // An index signed by a different key cannot trigger an archive download or native probe.
 func TestDownloadRequiresOfficialSignature(t *testing.T) {
-	index, archive, _ := signedFixture(t)
+	index, archive, _ := signedFixture(t, []byte("fixture library"))
 	key, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -148,5 +150,53 @@ func TestDownloadRequiresOfficialSignature(t *testing.T) {
 	}
 	if err := Download(t.Context(), nil); err == nil || IsDownloaded() {
 		t.Fatalf("unverified component was accepted: %v", err)
+	}
+}
+
+// Reinstalling the verified files already mapped by the decoder immediately re-enables playback after removal.
+func TestReinstallMappedComponentRestoresReadiness(t *testing.T) {
+	index, archive, key := signedFixture(t, []byte("fixture library"))
+	withTestComponent(t, index, archive, key)
+	componentProbe = func(context.Context, string) error { return nil }
+	if err := Download(t.Context(), nil); err != nil || !Ready() {
+		t.Fatalf("first install did not enable MPV: %v", err)
+	}
+	mapped = installed
+	original := mapped.path
+	if err := Delete(); err != nil || Ready() || IsDownloaded() {
+		t.Fatalf("delete did not deactivate MPV: %v", err)
+	}
+	if _, err := os.Stat(original); err != nil {
+		t.Fatalf("mapped library was removed early: %v", err)
+	}
+	if err := Download(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !Ready() || !IsDownloaded() || NeedsRestart() {
+		t.Fatal("the same reinstalled component required a restart")
+	}
+	if installed.path == original || mapped.path != original {
+		t.Fatal("reinstall did not persist a new path while retaining the mapped library")
+	}
+	if err := Load(); err != nil {
+		t.Fatalf("reinstalled mapped library could not be enabled: %v", err)
+	}
+}
+
+// A changed payload cannot reactivate a different library left mapped after removal.
+func TestReinstallDifferentComponentWaitsForRestart(t *testing.T) {
+	index, archive, key := signedFixture(t, []byte("new fixture library"))
+	withTestComponent(t, index, archive, key)
+	componentProbe = func(context.Context, string) error { return nil }
+	mapped = componentLibrary{path: filepath.Join(cacheDirOverride, "package-old", "fixture.dll"),
+		files: []componentFile{{Name: "fixture.dll", SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("old")))}}}
+	if err := Delete(); err != nil {
+		t.Fatal(err)
+	}
+	if err := Download(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if Ready() || !IsDownloaded() || !NeedsRestart() || !errors.Is(Load(), ErrUnavailable) {
+		t.Fatal("a different payload was activated before the previous process released the library")
 	}
 }

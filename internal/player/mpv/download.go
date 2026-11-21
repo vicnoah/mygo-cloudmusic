@@ -85,8 +85,7 @@ func Download(ctx context.Context, onProgress func(done, total int64)) error {
 		return err
 	}
 	keep = true
-	installedPath = library
-	loadFailed = false
+	activateInstalled(library, manifest)
 	return nil
 }
 
@@ -153,12 +152,12 @@ func Delete() error {
 	if err := os.Remove(filepath.Join(root, "active.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	installedPath = ""
+	installed = componentLibrary{}
 	loadFailed = false
 	var inUse string
-	if loadedPath != "" {
+	if mapped.path != "" {
 		loadDisabled = true
-		inUse = filepath.Dir(loadedPath)
+		inUse = filepath.Dir(mapped.path)
 	}
 	return cleanComponents(root, "", inUse)
 }

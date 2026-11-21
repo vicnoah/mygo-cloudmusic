@@ -132,9 +132,21 @@ func TestLiveMPVComponent(t *testing.T) {
 	if err := Delete(); err != nil || Ready() || IsDownloaded() {
 		t.Fatalf("delete did not deactivate the mapped library: %v", err)
 	}
-	if _, err := os.Stat(loadedPath); err != nil {
+	if _, err := os.Stat(mapped.path); err != nil {
 		t.Fatalf("delete tried to remove the mapped library: %v", err)
 	}
 	t.Log("deactivated while the library was mapped")
+	if err := Download(t.Context(), nil); err != nil || !Ready() || NeedsRestart() {
+		t.Fatalf("reinstall of the same component did not enable MPV again: %v", err)
+	}
+	reinstalled, err := NewInstance(map[string]string{"ao": "null"})
+	if err != nil {
+		t.Fatalf("opening the reinstalled decoder: %v", err)
+	}
+	reinstalled.Close()
+	t.Log("reinstalled and enabled again in the same process")
+	if err := Delete(); err != nil {
+		t.Fatal(err)
+	}
 	// Windows cannot clean the mapped file until this process exits.
 }

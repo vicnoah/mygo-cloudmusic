@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -142,6 +143,7 @@ func (manifest componentManifest) validate(version string) error {
 	if !foundLibrary {
 		return errors.New("mpv: missing entry library in component manifest")
 	}
+	slices.SortFunc(manifest.Files, func(a, b componentFile) int { return strings.Compare(a.Name, b.Name) })
 	return nil
 }
 
@@ -313,6 +315,8 @@ func Restore(ctx context.Context) error {
 	if err := checkComponent(ctx, library, record.Manifest); err != nil {
 		return err
 	}
-	setInstalledLibrary(library)
+	loadMu.Lock()
+	activateInstalled(library, record.Manifest)
+	loadMu.Unlock()
 	return cleanComponents(root, record.Directory, "")
 }
