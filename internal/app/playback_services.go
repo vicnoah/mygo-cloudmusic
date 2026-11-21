@@ -116,7 +116,10 @@ func (h platformHost) ToggleDesktopLyricsLock() {
 }
 
 func (h platformHost) DesktopLyricsState() pluginapi.DesktopLyricsState {
-	return h.a.localDesktopLyrics().State()
+	state := h.a.localDesktopLyrics().State()
+	state.CustomColor = h.a.settings.DesktopLyricsColor
+	state.FontFamily = h.a.settings.LyricsFontFamily
+	return state
 }
 
 func (h platformHost) SetDesktopLyricsStyle(translation bool, size float32, color int) {

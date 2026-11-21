@@ -58,6 +58,7 @@ func (p *Player) Reset() {
 	p.order = nil
 	p.at = -1
 	p.track = nil
+	p.cover = nil
 	p.info = nil
 	p.lyrics = nil
 	p.lyricsLoaded = false

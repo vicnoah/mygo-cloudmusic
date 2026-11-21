@@ -17,16 +17,60 @@ func (h platformHost) DesktopSettings() pluginapi.DesktopSettings {
 			UseMPV: s.UseMPV, MPVExclusive: s.MPVExclusive, MPVGapless: s.MPVGapless,
 			MPVAudioDevice: s.MPVAudioDevice,
 		},
-		CacheUsed:      a.cacheUsed,
-		CacheTask:      a.desktopTasks.latest[protocol.TaskCacheClear],
-		NotchAvailable: a.quickPlayerWindow() != nil,
-		Updates:        a.updates,
+		CacheUsed:                   a.cacheUsed,
+		CacheTask:                   a.desktopTasks.latest[protocol.TaskCacheClear],
+		NotchAvailable:              a.quickPlayerWindow() != nil,
+		Updates:                     a.updates,
+		DesktopLyricsColorAvailable: true,
+		DesktopLyricsColor:          s.DesktopLyricsColor,
+		StatusLyricsAvailable:       statusLyricsAvailable(),
+		StatusLyricsEnabled:         s.StatusLyrics && statusLyricsAvailable(),
+		TaskbarLyricsFontSize:       taskbarLyricsFontSize(s.TaskbarLyricsFontSize),
+		TaskbarLyricsFontFamily:     s.LyricsFontFamily,
+		LyricsFontAvailable:         true,
+		LyricsFontFamily:            s.LyricsFontFamily,
 	}
 	if a.updates {
 		state.UpdateChecks, state.UpdateDownloads = updateChecks(), updateDownloads()
 		state.LastUpdateCheck = lastUpdateCheck()
 	}
 	return state
+}
+
+func (h platformHost) SetDesktopLyricsColor(color string) {
+	if h.canWrite() {
+		if err := h.a.setDesktopLyricsColor(color); err != nil {
+			h.Toast(err.Error())
+		}
+	}
+}
+
+func (h platformHost) SetStatusLyrics(enabled bool) {
+	if h.canWrite() {
+		if err := h.a.setStatusLyrics(enabled); err != nil {
+			h.Toast(err.Error())
+		}
+	}
+}
+
+func (h platformHost) SetTaskbarLyricsFontSize(size int) {
+	if h.canWrite() {
+		if err := h.a.setTaskbarLyricsFontSize(size); err != nil {
+			h.Toast(err.Error())
+		}
+	}
+}
+
+func (h platformHost) SetTaskbarLyricsFontFamily(family string) {
+	h.SetLyricsFontFamily(family)
+}
+
+func (h platformHost) SetLyricsFontFamily(family string) {
+	if h.canWrite() {
+		if err := h.a.setLyricsFontFamily(family); err != nil {
+			h.Toast(err.Error())
+		}
+	}
 }
 
 func (a *app) quickPlayerPreferences() pluginapi.QuickPlayerPreferences {

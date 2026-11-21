@@ -80,6 +80,7 @@ type Player struct {
 	awaiting   bool // at the queue's end, for what the feed gives
 
 	track   *pluginapi.Track
+	cover   []byte
 	out     *audio.Player
 	stream  stream
 	info    *pluginapi.Stream // what the current track streams
@@ -163,6 +164,7 @@ func (p *Player) notifyChanged() {
 
 // announce shows the system the track, and its cover once loaded.
 func (p *Player) announce(t *pluginapi.Track, artwork []byte) {
+	p.cover = artwork
 	state := mygo.PlaybackPaused
 	if p.Playing() {
 		state = mygo.PlaybackPlaying
@@ -409,6 +411,9 @@ func (p *Player) CycleRepeat() {
 
 // Current returns the track playing or loading, or nil.
 func (p *Player) Current() *pluginapi.Track { return p.track }
+
+// CurrentArtwork returns the current track's cover data, which callers treat as read-only.
+func (p *Player) CurrentArtwork() []byte { return p.cover }
 
 // Queue returns the tracks queued, in the order they were given.
 func (p *Player) Queue() []pluginapi.Track { return p.queue }
@@ -980,6 +985,7 @@ func (p *Player) loadTrack(at, skipped int, play bool, from time.Duration, start
 						p.cast.cover = cover
 						p.dlnaCtrl.UpdateCover(p.cast.id, cover)
 					}
+					p.notifyChanged()
 				}
 			})
 		}

@@ -202,6 +202,14 @@ func (r pluginReverse) apply(in PluginHostCall, reply *PluginHostReply) error {
 			return protocol.Failure{Code: "invalid-settings"}
 		}
 		return a.saveDesktopLyricsPrefs(prefs)
+	case protocol.HostSetDesktopLyricsColor:
+		return a.setDesktopLyricsColor(in.Text)
+	case protocol.HostSetStatusLyrics:
+		return a.setStatusLyrics(in.Flag)
+	case protocol.HostSetTaskbarLyricsFontSize:
+		return a.setTaskbarLyricsFontSize(in.Index)
+	case protocol.HostSetTaskbarLyricsFontFamily, protocol.HostSetLyricsFontFamily:
+		return a.setLyricsFontFamily(in.Text)
 	case protocol.TaskCacheClear:
 		return reply.AcceptTask(a.clearCache())
 	case protocol.TaskDecoderDownload:

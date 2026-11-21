@@ -28,7 +28,7 @@ var trayTemplate []byte
 var trayColor []byte
 
 func showsTray(s settings) bool {
-	return runtime.GOOS != "darwin" || s.AppIcon != "dock"
+	return runtime.GOOS != "darwin" || s.AppIcon != "dock" || s.StatusLyrics
 }
 
 // activationPolicy is macOS's for the settings: no Dock icon for the menu
@@ -73,11 +73,8 @@ func (a *app) changeAppIcon() {
 func (a *app) applyTray() {
 	switch show := showsTray(a.settings); {
 	case show && a.tray == nil:
-		icon, template := trayColor, false
-		if runtime.GOOS == "darwin" {
-			icon, template = trayTemplate, true
-		}
-		t, err := mygo.NewTray(mygo.TrayOptions{ID: "cloudmusic", Icon: icon, IconIsTemplate: template, ToolTip: appName, Menu: a.trayMenu()})
+		icon, template := trayArtwork()
+		t, err := mygo.NewTray(mygo.TrayOptions{ID: "cloudmusic", Icon: icon, IconIsTemplate: template, ToolTip: appName, Title: a.statusLyrics.title, Menu: a.trayMenu()})
 		if err != nil {
 			log.Println("tray:", err)
 			return
@@ -88,7 +85,16 @@ func (a *app) applyTray() {
 	case !show && a.tray != nil:
 		a.tray.Destroy()
 		a.tray = nil
+		a.statusLyrics.trayCover = nil
 	}
+	a.syncStatusLyrics()
+}
+
+func trayArtwork() ([]byte, bool) {
+	if runtime.GOOS == "darwin" {
+		return trayTemplate, true
+	}
+	return trayColor, false
 }
 
 // trayMenu is the icon's menu: the window, the player's controls,
@@ -137,6 +143,12 @@ func (a *app) trayMenu() *mygo.Menu {
 			}
 			bindMenuActions(local, a.platformContext)
 			items = append(items, local...)
+		}
+		if statusLyricsAvailable() {
+			items = append(items, &mygo.MenuItem{
+				Label: "任务栏歌词", Type: mygo.MenuItemCheckbox, Checked: a.settings.StatusLyrics,
+				Click: click(func() { (platformHost{a: a}).SetStatusLyrics(!a.settings.StatusLyrics) }),
+			})
 		}
 		items = append(items,
 			mygo.Separator(),

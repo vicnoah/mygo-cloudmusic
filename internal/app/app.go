@@ -24,6 +24,7 @@ type app struct {
 	pluginsWin        *mygo.Window
 	desktopLyrics     desktop.LyricsWindow
 	tray              *mygo.Tray
+	statusLyrics      statusLyrics
 	art               *artwork.Cache
 	pl                *player.Player
 	toast             string
@@ -178,6 +179,7 @@ func run(registrations []appplatform.Registration, managed bool) error {
 		a.syncMPVSettings()
 		a.pl.Changed = func() {
 			a.keepSession()
+			a.syncStatusLyrics()
 			if remote := a.remoteActive(); remote != nil {
 				remote.publishPlayback(a, false)
 			}
@@ -237,6 +239,7 @@ func run(registrations []appplatform.Registration, managed bool) error {
 	})
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
 		a.quitting = true
+		a.syncStatusLyrics()
 		if a.cancelPlugins != nil {
 			a.cancelPlugins()
 		}

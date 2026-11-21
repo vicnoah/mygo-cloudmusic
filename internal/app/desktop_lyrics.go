@@ -1,9 +1,33 @@
 package app
 
 import (
+	"strings"
+
 	"github.com/waygu-music-plugin/sdk/desktop"
 	"github.com/waygu-music-plugin/sdk/pluginapi"
+	"github.com/waygu-music-plugin/sdk/protocol"
 )
+
+func (a *app) setDesktopLyricsColor(value string) error {
+	if value != "" {
+		if _, ok := desktop.ParseLyricsColor(value); !ok {
+			return protocol.Failure{Code: "invalid-settings"}
+		}
+		value = strings.ToLower(value)
+	}
+	if a.settings.DesktopLyricsColor == value {
+		return nil
+	}
+	next := a.settings
+	next.DesktopLyricsColor = value
+	if err := next.save(); err != nil {
+		return err
+	}
+	a.settings = next
+	a.desktopLyrics.Invalidate()
+	a.desktopTasksChanged()
+	return nil
+}
 
 func (a *app) newDesktopLyrics() {
 	if a.desktopLyrics.IsOpen() || a.platformWindows[a.platformID][pluginapi.DesktopLyricsWindow].Root == nil {

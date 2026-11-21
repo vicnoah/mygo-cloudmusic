@@ -18,6 +18,10 @@ type desktopLyricsSettings = pluginapi.DesktopLyricsPreferences
 // data directory.
 type settings struct {
 	platformSettings
+	DesktopLyricsColor    string `json:"desktopLyricsColor,omitempty"`
+	StatusLyrics          bool   `json:"statusLyrics,omitempty"`
+	TaskbarLyricsFontSize int    `json:"taskbarLyricsFontSize,omitempty"`
+	LyricsFontFamily      string `json:"lyricsFontFamily,omitempty"`
 	// Notch shows the quick player around the notch: the listener turns
 	// it on.
 	Notch bool `json:"notch"`
@@ -158,7 +162,16 @@ func loadSettings(registrations ...pluginapi.Registration) settings {
 	s := defaultSettings()
 	if path, err := settingsPath(); err == nil {
 		if b, err := os.ReadFile(path); err == nil {
-			json.Unmarshal(b, &s)
+			file := struct {
+				*settings
+				LegacyFont string  `json:"taskbarLyricsFontFamily"`
+				SharedFont *string `json:"lyricsFontFamily"`
+			}{settings: &s}
+			json.Unmarshal(b, &file)
+			s.LyricsFontFamily = file.LegacyFont
+			if file.SharedFont != nil {
+				s.LyricsFontFamily = *file.SharedFont
+			}
 			s.loadLegacyNamespaces(b, registrations)
 		}
 		s.path = path

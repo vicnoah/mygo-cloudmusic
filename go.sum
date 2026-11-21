@@ -71,10 +71,14 @@ github.com/waygu-music-plugin/fnmusic v0.1.0 h1:s5FcGMI2wGpnQ6173GUDNUrgO7ZMBTic
 github.com/waygu-music-plugin/fnmusic v0.1.0/go.mod h1:GvgRNR8WoIH4QCl5Y17SIBnAhld3QsFDmA0kKkD8Ufo=
 github.com/waygu-music-plugin/fnmusic v0.1.1 h1:2ei6xt1FxCJa/3bBaPX7B24xIk1Pi/xoAKULhqQTScw=
 github.com/waygu-music-plugin/fnmusic v0.1.1/go.mod h1:E5sm5XsfHDhxPqgIVYpCxzJEze/s4XIVaiLgdSgLC9E=
+github.com/waygu-music-plugin/fnmusic v0.1.2 h1:/jz7y3S8jBTjKOO/bNCUThYPT0ot2zV1PqqlE96TZ7I=
+github.com/waygu-music-plugin/fnmusic v0.1.2/go.mod h1:O+niO3ZdofqG0wBfiO5L2tNknjLpMGPZbesFAusEJ94=
 github.com/waygu-music-plugin/sdk v0.1.1 h1:l2dCEZp9m4aRJR8cTp6fgy+Ujtw9USOtptgHjrS3CaA=
 github.com/waygu-music-plugin/sdk v0.1.1/go.mod h1:IRNYpLXVtWEJj4crqSflLSqadDhDRGkotN3CEnzKTtY=
 github.com/waygu-music-plugin/sdk v0.1.2 h1:VZbIhClKAeQDzHUi5iaYEJ9whFfUiCUSeu4h5bqyzVQ=
 github.com/waygu-music-plugin/sdk v0.1.2/go.mod h1:IRNYpLXVtWEJj4crqSflLSqadDhDRGkotN3CEnzKTtY=
+github.com/waygu-music-plugin/sdk v0.1.3 h1:IuRIyBbp5twvSbOXWkCF2yjzY1vR1rZ5Qoqc9sJr6J0=
+github.com/waygu-music-plugin/sdk v0.1.3/go.mod h1:IRNYpLXVtWEJj4crqSflLSqadDhDRGkotN3CEnzKTtY=
 go.digitalxero.dev/rpm v0.3.4 h1:iq+rx7zB6wQeNhLQ1mcvW92v9ZqNaxCvuu0+nPVit4w=
 go.digitalxero.dev/rpm v0.3.4/go.mod h1:45EsEzHamzqInyWQx9vpj7OYpL0BrkbQF87VdrLn5wo=
 golang.org/x/crypto v0.57.0 h1:3ZVCjf8Ggz7zneR/EHRVx68Ctf+2pmIMP2UFhh9cC6M=
