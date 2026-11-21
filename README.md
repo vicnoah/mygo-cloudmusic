@@ -2,6 +2,8 @@
 
 用 Go 和 [MyGo](https://github.com/egoist/mygo) 写的第三方桌面音乐客户端，原生界面，无 WebView。
 
+**[插件网站 · 浏览与安装](https://vicnoah.github.io/mygo-cloudmusic/plugins/)** · [下载肥牛音乐](https://github.com/vicnoah/mygo-cloudmusic/releases/latest) · [项目官网](https://vicnoah.github.io/mygo-cloudmusic/)
+
 宿主默认内置 **飞牛音乐（FN Music）**。**Songloft**、**Navidrome / Jellyfin / Gonic 等 Subsonic 兼容服务**及其它音乐平台可通过托盘的「插件管理」单独安装、更新与回退。各平台分别管理账号、歌单、收藏和音质等平台专属设置。
 
 各平台插件绘制自己的完整界面，包括主窗口的底部播放器、正在播放页、歌词，以及设置窗和桌面歌词。插件负责获取平台音源和歌词，宿主提供原生窗口运行、音频解码与输出、队列执行及本地缓存等服务。平台切换统一在宿主的「插件管理」窗口完成。
@@ -56,9 +58,29 @@
 - 喜欢歌曲、播放队列、随机与循环播放
 - 浅色 / 深色 / 跟随系统主题
 
-## 切换平台
+## 插件
 
-从托盘或应用菜单打开 **「插件管理」**，在已安装的平台旁点击 **「切换」**。选择插件包后，可用预填的官方目录安装或更新，也可在「来源设置」填写其他 HTTPS 目录地址。飞牛随宿主提供，可在同一窗口切回。
+### 浏览、安装与切换
+
+在插件网站浏览官方与社区插件。点击「在肥牛音乐中安装」，在客户端核对插件来源、版本和设备兼容性后确认安装。 [打开插件网站](https://vicnoah.github.io/mygo-cloudmusic/plugins/)
+
+也可以从托盘或应用菜单打开「插件管理」，在同一窗口安装、切换、更新或回退插件。飞牛音乐随宿主提供。Subsonic 的连接类型在插件自己的「设置」中选择。在「来源设置」可填写 HTTPS 地址，添加额外的插件目录。
+
+GitHub 上的插件目录、清单和安装包默认通过 GH-Proxy 下载。要直接访问 GitHub，可在「插件管理 → 来源设置」关闭「GitHub 下载加速」并保存。 [GH-Proxy 使用指南](https://gh-proxy.com/docs/github-accelerator)
+
+### 开发与网站收录
+
+插件使用 Go 编写业务逻辑和完整的原生界面。外置插件通过 SDK 的 `desktop.RunPlatformPlugin` 入口运行。开发者可从内置飞牛音乐的窗口和服务适配代码入手。 [飞牛音乐源码](https://github.com/waygu-music-plugin/fnmusic) · [SDK 和协议说明](https://github.com/waygu-music-plugin/sdk)
+
+要收录到插件网站，将插件发布到公开的 GitHub 仓库，添加话题 `wagyu-music-plugin`，并在最新正式版附上 `catalog.json`、签名的 `manifest.json` 及各目标系统的 ZIP 包。每个仓库对应一个插件包。建议用作者名作为插件包 ID 的前缀。网站通过 GitHub Actions 发现并验证符合格式的发行。 [目录与发布工具](https://github.com/waygu-music-plugin/registry)
+
+| 项目 | 源码仓库 |
+| --- | --- |
+| SDK | [waygu-music-plugin/sdk](https://github.com/waygu-music-plugin/sdk) |
+| 飞牛音乐 | [waygu-music-plugin/fnmusic](https://github.com/waygu-music-plugin/fnmusic) |
+| Songloft | [waygu-music-plugin/songloft](https://github.com/waygu-music-plugin/songloft) |
+| Subsonic 兼容平台 | [waygu-music-plugin/subsonic](https://github.com/waygu-music-plugin/subsonic) |
+| 官方目录与发布工具 | [waygu-music-plugin/registry](https://github.com/waygu-music-plugin/registry) |
 
 ## 构建
 
@@ -70,7 +92,7 @@ go tool mygo build   # 打包到 build/
 go test ./...        # 测试宿主
 ```
 
-宿主通过 Go module 引入独立的 SDK 与飞牛音乐。外置插件在各自仓库构建和发版。见[插件仓库与安装说明](docs/plugins.md)。
+宿主通过 Go module 引入独立的 SDK 与飞牛音乐。外置插件在各自仓库构建和发版。 [插件开发与收录说明](#开发与网站收录)
 
 ## 致谢
 
