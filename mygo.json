@@ -2,7 +2,7 @@
   "name": "Wagyu Music",
   "identifier": "dev.egoist.cloudmusic",
   "slug": "wagyu-music",
-  "version": "0.2.32-alpha.2",
+  "version": "0.2.32-alpha.3",
   "urlSchemes": ["wagyu-music"],
   "out": "build",
   "updates": {
@@ -23,7 +23,8 @@
   "linux": {
     "comment": "第三方自建音乐库桌面客户端",
     "categories": ["AudioVideo", "Audio", "Player"],
-    "webview": false
+    "webview": false,
+    "depends": ["libsecret-1-0"]
   },
   "windows": {
     "displayName": "肥牛音乐",

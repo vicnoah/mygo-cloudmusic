@@ -1058,13 +1058,13 @@ func (p *Player) loadTrack(at, skipped int, play bool, from time.Duration, start
 			}
 
 			// 2. High-quality MPV engine active.
+			var decoderErr error
 			if p.UsingMPV() {
 				engine := p.mpvOut
 				if engine == nil || engine.Closed() {
-					var err error
-					engine, err = mpv.NewEngine(p.mpvCfg)
-					if err != nil {
-						log.Printf("start MPV decoder: %v", err)
+					engine, decoderErr = mpv.NewEngine(p.mpvCfg)
+					if decoderErr != nil {
+						log.Printf("start MPV decoder: %v", decoderErr)
 					} else {
 						p.mpvOut = engine
 						p.rgSet = false
@@ -1083,7 +1083,8 @@ func (p *Player) loadTrack(at, skipped int, play bool, from time.Duration, start
 							}
 						})
 					})
-					if err := engine.Play(playURL, nil, p.pending); err == nil {
+					decoderErr = engine.Play(playURL, nil, p.pending)
+					if decoderErr == nil {
 						p.fade.attach(mpvVolumeOutput{p: p, e: p.mpvOut}, fadeLevel)
 						p.applyGain()
 						p.mpvOut.OnEnd(func() {
@@ -1123,6 +1124,9 @@ func (p *Player) loadTrack(at, skipped int, play bool, from time.Duration, start
 			// 3. Built-in pure Go player.
 			if s == nil {
 				p.err = "无法解码当前音频格式"
+				if decoderErr != nil {
+					p.err = fmt.Sprintf("MPV 播放失败（%v）", decoderErr)
+				}
 				p.playing = false
 				p.sync()
 				return

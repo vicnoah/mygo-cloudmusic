@@ -164,6 +164,9 @@ func run(registrations []appplatform.Registration, managed bool) error {
 		}
 	}
 	mygo.App.WhenReady(func() {
+		if err := mpv.PrepareRuntime(); err != nil {
+			log.Printf("prepare MPV runtime: %v", err)
+		}
 		a.settings = loadSettings(a.platformRegistrations...)
 		a.loadPluginRegistry()
 		a.settings.applyAppearance()
