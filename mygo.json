@@ -2,7 +2,7 @@
   "name": "Wagyu Music",
   "identifier": "dev.egoist.cloudmusic",
   "slug": "wagyu-music",
-  "version": "0.2.32-alpha.4",
+  "version": "0.2.32",
   "urlSchemes": ["wagyu-music"],
   "out": "build",
   "updates": {
