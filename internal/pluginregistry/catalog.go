@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -68,6 +69,15 @@ type Artifact struct {
 	Size        int64
 	SHA256      string
 	EntrySHA256 string
+}
+
+func (a Artifact) executablePath() (string, error) {
+	path, err := localArchivePath(a.Entry)
+	if err != nil || a.Entry == "." ||
+		(runtime.GOOS == "windows" && !strings.EqualFold(filepath.Ext(path), ".exe")) {
+		return "", errors.New("invalid executable path in plugin manifest")
+	}
+	return path, nil
 }
 
 func (s Source) lookup(ctx context.Context, client *http.Client) (CatalogEntry, error) {

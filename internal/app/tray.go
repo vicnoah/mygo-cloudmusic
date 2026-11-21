@@ -44,7 +44,7 @@ func activationPolicy(s settings, windowOpen bool) mygo.ActivationPolicy {
 // windowOpen tells whether the main window or the settings window is
 // open: shown or minimized, as the notch player doesn't count.
 func (a *app) windowOpen() bool {
-	if a.settingsWin != nil || a.pluginsWin != nil || a.pluginStartup.notice != nil {
+	if a.settingsWin != nil || a.pluginsWin != nil || a.pluginStartup.notice != nil || a.pluginUpdates.notice != nil {
 		return true
 	}
 	if remote := a.remoteActive(); remote != nil && remote.visible {

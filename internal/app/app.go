@@ -239,6 +239,7 @@ func run(registrations []appplatform.Registration, managed bool) error {
 	})
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
 		a.quitting = true
+		a.stopPluginUpdateChecks()
 		a.syncStatusLyrics()
 		if a.cancelPlugins != nil {
 			a.cancelPlugins()

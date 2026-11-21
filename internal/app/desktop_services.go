@@ -185,6 +185,7 @@ func (h platformHost) SetUpdateChecks(on bool) {
 		return
 	}
 	setUpdateChecks(on)
+	h.a.syncPluginUpdateChecks()
 }
 func (h platformHost) SetUpdateDownloads(on bool) {
 	if !h.canWrite() {

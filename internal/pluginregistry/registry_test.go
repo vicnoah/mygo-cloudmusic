@@ -54,8 +54,10 @@ func TestRegistryInstallUpdateAndRollback(t *testing.T) {
 	latest.Store("1.0")
 	var badSignature atomic.Bool
 	var badProtocol atomic.Bool
+	var missingEntry atomic.Bool
 	var newPublisher, omitKey atomic.Bool
 	var manifestRequests atomic.Int32
+	var archiveRequests atomic.Int32
 	const catalogURL = "https://raw.githubusercontent.com/example/plugins/main/catalog.json"
 	const releaseURL = "https://github.com/example/plugins/releases/download/v1/manifest.json"
 	const archiveURL = "https://github.com/example/plugins/releases/download/v1/archive.zip"
@@ -79,8 +81,12 @@ func TestRegistryInstallUpdateAndRollback(t *testing.T) {
 			if badProtocol.Load() {
 				protocolVersion = 2
 			}
+			entry := "songloft"
+			if missingEntry.Load() {
+				entry = "other"
+			}
 			release, _ := json.Marshal(Release{
-				Format: 1, Protocol: protocolVersion, Package: "songloft", Version: version, Name: "Songloft", Entries: []string{"songloft"},
+				Format: 1, Protocol: protocolVersion, Package: "songloft", Version: version, Name: "Songloft", Entries: []string{entry},
 				Artifacts: []Artifact{{
 					OS: runtime.GOOS, Arch: runtime.GOARCH, URL: archiveURL, Entry: executable,
 					Size: int64(len(archive)), SHA256: fmt.Sprintf("%x", sha256.Sum256(archive)),
@@ -97,6 +103,7 @@ func TestRegistryInstallUpdateAndRollback(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(SignedManifest{Manifest: release, Signature: signature})
 		case "/archive":
+			archiveRequests.Add(1)
 			_, _ = w.Write(versions[version])
 		default:
 			http.NotFound(w, req)
@@ -162,9 +169,15 @@ func TestRegistryInstallUpdateAndRollback(t *testing.T) {
 	}
 	requireInstalled("1.0")
 	wantProxy, source.UseGitHubProxy = false, false // A direct update must keep the original source of the proxied install.
+	if review, err := registry.ReviewUpdate(ctx, source, "songloft"); err != nil || review.Release.Version != "" {
+		t.Fatalf("the installed version was offered again: %+v, %v", review.Release, err)
+	}
 	latest.Store("1.1")
 	before := manifestRequests.Load()
 	newPublisher.Store(true)
+	if _, err := registry.ReviewUpdate(ctx, source, "songloft"); err == nil || manifestRequests.Load() != before {
+		t.Fatalf("a check did not reject a changed publisher before fetching its manifest: %v", err)
+	}
 	if _, err := registry.Install(ctx, source, probe); err == nil || manifestRequests.Load() != before {
 		t.Fatalf("an update changed the installed publisher or fetched its manifest: %v", err)
 	}
@@ -177,15 +190,39 @@ func TestRegistryInstallUpdateAndRollback(t *testing.T) {
 	requireInstalled("1.0")
 	badSignature.Store(false)
 	badProtocol.Store(true)
+	if _, err := registry.ReviewUpdate(ctx, source, "songloft"); err == nil || err.Error() != "unsupported platform protocol version" {
+		t.Fatalf("a check allowed an incompatible signed update: %v", err)
+	}
 	if _, err := registry.Install(ctx, source, probe); err == nil || err.Error() != "unsupported platform protocol version" {
 		t.Fatalf("incompatible signed release was not rejected: %v", err)
 	}
 	requireInstalled("1.0")
 	badProtocol.Store(false)
-	if _, err := registry.Install(ctx, source, probe); err != nil {
+	missingEntry.Store(true)
+	if review, err := registry.ReviewUpdate(ctx, source, "songloft"); err != nil || review.Release.Version != "" {
+		t.Fatalf("a release that removed the active entry was offered: %+v, %v", review.Release, err)
+	}
+	missingEntry.Store(false)
+	downloads := archiveRequests.Load()
+	review, err := registry.ReviewUpdate(ctx, source, "songloft")
+	if err != nil || review.Release.Version != "1.1" || archiveRequests.Load() != downloads {
+		t.Fatalf("expected a metadata-only review of 1.1: %+v, %v, downloads=%d", review.Release, err, archiveRequests.Load()-downloads)
+	}
+	requireInstalled("1.0")
+	latest.Store("1.2")
+	if _, err := registry.Install(ctx, review.Source, probe); err == nil || archiveRequests.Load() != downloads {
+		t.Fatalf("the reviewed version changed before confirmation: %v", err)
+	}
+	latest.Store("1.1")
+	if _, err := registry.Install(ctx, review.Source, probe); err != nil {
 		t.Fatal(err)
 	}
 	requireInstalled("1.1")
+	latest.Store("1.0")
+	if older, err := registry.ReviewUpdate(ctx, source, "songloft"); err != nil || older.Release.Version != "" {
+		t.Fatalf("a downgrade was offered as an update: %+v, %v", older.Release, err)
+	}
+	latest.Store("1.1")
 	installed, err := registry.Installed()
 	if err != nil || installed["songloft"].Name != "Songloft" || !installed["songloft"].CanRollback {
 		t.Fatalf("installed package lost the signed display name or rollback history: %+v, %v", installed, err)

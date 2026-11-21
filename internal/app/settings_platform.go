@@ -14,6 +14,7 @@ type platformSettings struct {
 	PluginCatalogs           map[string]pluginCatalogSettings   `json:"pluginCatalogs,omitempty"`
 	PluginCatalogURL         string                             `json:"pluginCatalogURL,omitempty"`
 	LastPluginEntries        map[string]string                  `json:"lastPluginEntries,omitempty"`
+	PluginUpdateReminders    map[string]pluginUpdateReminder    `json:"pluginUpdateReminders,omitempty"`
 	DisablePluginGitHubProxy bool                               `json:"disablePluginGitHubProxy,omitempty"`
 	LegacySubsonicSession    *legacySubsonicSession             `json:"legacySubsonicSession,omitempty"`
 
@@ -175,6 +176,8 @@ func (a *app) commitPlatform(id appplatform.ID, persist bool) {
 		return
 	}
 	starting := a.platformID == ""
+	a.pluginUpdates.ready = nil
+	a.stopPluginUpdateChecks()
 	wasRemote := a.localPlugins[a.platformID] != nil
 	if a.pl != nil {
 		a.saveSession()

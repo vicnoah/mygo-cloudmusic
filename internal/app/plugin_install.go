@@ -231,14 +231,32 @@ func (a *app) changeInstalledPlugin(pkg *managedPlugin, action string) {
 	a.changePlugin(pkg, action, nil)
 }
 
-func (a *app) changePlugin(pkg *managedPlugin, action string, reviewed *pluginregistry.Source) {
-	if pkg == nil || a.pluginRegistry == nil || pkg.busy {
-		return
+func (a *app) pluginInstallSource(id, catalog string) (pluginregistry.Source, error) {
+	pinned := ""
+	if catalog == platformcatalog.OfficialCatalog {
+		pinned = platformcatalog.OfficialPublisherKey
+	} else if config := a.settings.PluginCatalogs[id]; config.URL == catalog {
+		pinned = config.LegacyKey
+	}
+	key, err := base64.StdEncoding.DecodeString(pinned)
+	return pluginregistry.Source{Package: id, Catalog: catalog, TrustedKey: key, UseGitHubProxy: !a.settings.DisablePluginGitHubProxy}, err
+}
+
+func (a *app) pluginPackageBusy(pkg *managedPlugin) bool {
+	if pkg.busy {
+		return true
 	}
 	for _, local := range a.localPlugins {
 		if local.program.Identity.Package == pkg.id && local.pending != nil {
-			return
+			return true
 		}
+	}
+	return false
+}
+
+func (a *app) changePlugin(pkg *managedPlugin, action string, reviewed *pluginregistry.Source) {
+	if pkg == nil || a.pluginRegistry == nil || a.pluginPackageBusy(pkg) {
+		return
 	}
 	source := pluginregistry.Source{Package: pkg.id, Catalog: pkg.source, UseGitHubProxy: !a.settings.DisablePluginGitHubProxy}
 	if reviewed != nil {
@@ -248,19 +266,16 @@ func (a *app) changePlugin(pkg *managedPlugin, action string, reviewed *pluginre
 		source = *reviewed
 		source.UseGitHubProxy = !a.settings.DisablePluginGitHubProxy
 	} else if action == "install" {
-		pinned := ""
-		if source.Catalog == platformcatalog.OfficialCatalog {
-			pinned = platformcatalog.OfficialPublisherKey
-		} else if config := a.settings.PluginCatalogs[pkg.id]; config.URL == source.Catalog {
-			pinned = config.LegacyKey
-		}
 		var err error
-		source.TrustedKey, err = base64.StdEncoding.DecodeString(pinned)
+		source, err = a.pluginInstallSource(pkg.id, pkg.source)
 		if err != nil {
 			pkg.message = "无法读取此插件的发布者信息"
 			a.redraw()
 			return
 		}
+	}
+	if current := a.localPlugins[a.platformID]; current != nil && current.program.Identity.Package == pkg.id {
+		a.closePluginUpdateNotice()
 	}
 	pkg.busy, pkg.message = true, "正在验证插件…"
 	a.redraw()
@@ -314,7 +329,7 @@ func (a *app) changePlugin(pkg *managedPlugin, action string, reviewed *pluginre
 			a.setInstalled(pkg, item)
 			pkg.message = "已验证 " + item.Version.Version
 			if current := a.localPlugins[a.platformID]; current != nil && current.program.Identity.Package == pkg.id {
-				pkg.message += "，下次启用时生效"
+				pkg.message += "，重启应用或重新启用插件后生效"
 			}
 		})
 	})

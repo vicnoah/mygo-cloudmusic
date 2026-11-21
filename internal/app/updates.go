@@ -26,6 +26,7 @@ func (a *app) useUpdater() {
 	// A check or an answer in the update window changes what the settings
 	// show.
 	updater.OnChange(func() {
+		a.syncPluginUpdateChecks()
 		if a.settingsWin != nil {
 			a.settingsWin.Invalidate()
 		}

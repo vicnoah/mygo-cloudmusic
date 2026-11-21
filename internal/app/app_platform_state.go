@@ -41,6 +41,7 @@ type appPlatformState struct {
 	pluginSource          pluginSourceEditor
 	pluginLink            pluginLinkInstaller
 	pluginStartup         pluginStartup
+	pluginUpdates         pluginUpdates
 }
 
 type platformAuthority struct {

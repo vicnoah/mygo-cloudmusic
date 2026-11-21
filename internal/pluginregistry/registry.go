@@ -119,10 +119,9 @@ func (r *Registry) Install(ctx context.Context, source Source, probe func(contex
 	if err != nil {
 		return Program{}, err
 	}
-	entry, err := localArchivePath(artifact.Entry)
-	if err != nil || artifact.Entry == "." ||
-		(runtime.GOOS == "windows" && !strings.EqualFold(filepath.Ext(entry), ".exe")) {
-		return Program{}, errors.New("invalid executable path in plugin manifest")
+	entry, err := artifact.executablePath()
+	if err != nil {
+		return Program{}, err
 	}
 	if err := os.MkdirAll(r.dir, 0o700); err != nil {
 		return Program{}, err

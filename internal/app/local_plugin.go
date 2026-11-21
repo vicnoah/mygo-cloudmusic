@@ -220,6 +220,12 @@ func (a *app) watchLocalPlugin(candidate *pluginProcess, activate PluginAction, 
 		})
 		return
 	}
+	mygo.RunOnMain(func() {
+		if !a.quitting && a.remoteActive() == candidate {
+			a.pluginUpdates.ready = candidate
+			a.syncPluginUpdateChecks()
+		}
+	})
 	<-candidate.transport.Done()
 	mygo.RunOnMain(func() { a.processLost(candidate, nil) })
 }

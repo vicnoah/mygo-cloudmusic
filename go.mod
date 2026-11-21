@@ -12,9 +12,10 @@ require (
 	github.com/koron/go-ssdp v0.1.0
 	github.com/mewkiz/flac v1.0.14
 	github.com/supersonic-app/go-upnpcast v0.1.1-0.20260517163705-d76cd97c192f
-	github.com/waygu-music-plugin/fnmusic v0.1.2
+	github.com/waygu-music-plugin/fnmusic v0.1.3
 	github.com/waygu-music-plugin/sdk v0.1.3
 	golang.org/x/image v0.46.0
+	golang.org/x/mod v0.42.0
 	golang.org/x/sys v0.48.0
 )
 
