@@ -248,8 +248,11 @@ func cleanComponents(root, keep, loaded string) error {
 	var cleanupErr error
 	for _, entry := range entries {
 		name := entry.Name()
-		if strings.HasPrefix(name, componentPrefix) && name != keep && filepath.Join(root, name) != loaded {
-			cleanupErr = errors.Join(cleanupErr, os.RemoveAll(filepath.Join(root, name)))
+		path := filepath.Join(root, name)
+		staleArchive := strings.HasPrefix(name, ".download-") || strings.HasPrefix(name, ".active-")
+		unusedPackage := strings.HasPrefix(name, componentPrefix) && name != keep && path != loaded
+		if staleArchive || unusedPackage {
+			cleanupErr = errors.Join(cleanupErr, os.RemoveAll(path))
 		}
 	}
 	return cleanupErr

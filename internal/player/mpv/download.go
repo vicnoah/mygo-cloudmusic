@@ -168,12 +168,14 @@ type progressReader struct {
 	done       int64
 	total      int64
 	onProgress func(done, total int64)
+	lastUpdate time.Time
 }
 
 func (p *progressReader) Read(b []byte) (int, error) {
 	n, err := p.r.Read(b)
 	p.done += int64(n)
-	if p.onProgress != nil {
+	if n > 0 && p.onProgress != nil && (p.done >= p.total || time.Since(p.lastUpdate) >= 100*time.Millisecond) {
+		p.lastUpdate = time.Now()
 		p.onProgress(min(p.done, p.total), p.total)
 	}
 	return n, err

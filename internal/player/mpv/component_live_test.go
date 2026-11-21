@@ -44,6 +44,9 @@ func TestLiveMPVComponent(t *testing.T) {
 		old := cacheDirOverride
 		cacheDirOverride = root
 		defer func() { cacheDirOverride = old }()
+		if err := os.WriteFile(filepath.Join(root, ".download-abandoned"), []byte("partial ZIP"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		if err := Restore(t.Context()); err != nil || IsDownloaded() || Ready() {
 			t.Fatalf("deleted component restored: %v", err)
 		}
