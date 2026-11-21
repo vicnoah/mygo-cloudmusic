@@ -26,13 +26,11 @@ import (
 const ictool = "/Applications/Xcode.app/Contents/Applications/Icon Composer.app/Contents/Executables/ictool"
 
 // palette holds the colors of a document's record, label and tonearm.
-// The app's is a red record marbled with fat on a cream background; the
-// development app's is the same picture inverted, a cream record with red
-// marbling on a red background.
+// The app's is a vinyl record on a warm amber-to-dark background, with an
+// orange-red label and chrome tonearm. The development app inverts the
+// palette: cream record, dark-red label on a cool-dark background.
 type palette struct {
 	discTop, discMid, discEnd string
-	vein                      string
-	veinPeak                  float64
 	groove                    string
 	groovePeak                float64
 	rim                       string
@@ -41,29 +39,27 @@ type palette struct {
 	labelRing                 string
 	spindle                   string
 	armTop, armBottom, armCap string
-	sheen                     string
+	bgStart, bgEnd            string
 }
 
 var appPalette = palette{
-	discTop: "#C61B2C", discMid: "#A30F1F", discEnd: "#6E0A14",
-	vein: "#F8EADA", veinPeak: 0.55,
-	groove: "#3A050B", groovePeak: 0.14,
-	rim: "#F8EADA", rimOpacity: "0.18",
-	labelTop: "#FBF2E5", labelBottom: "#E8D8BF",
-	labelRing: "#000000", spindle: "#1B1B1F",
-	armTop: "#5A5A62", armBottom: "#141416", armCap: "#D9D5D8",
-	sheen: "#FFFFFF",
+	discTop: "#1c1c1c", discMid: "#0e0e0e", discEnd: "#080808",
+	groove: "#ffffff", groovePeak: 0.05,
+	rim: "#ffffff", rimOpacity: "0.10",
+	labelTop: "#ff7040", labelBottom: "#6e1008",
+	labelRing: "#000000", spindle: "#0e0e0e",
+	armTop: "#f0eeee", armBottom: "#303030", armCap: "#c8c4c8",
+	bgStart: "#f5dfa0", bgEnd: "#2a0e06",
 }
 
 var devPalette = palette{
-	discTop: "#FDF7ED", discMid: "#F1E4D1", discEnd: "#DCC7A9",
-	vein: "#C2182A", veinPeak: 0.32,
-	groove: "#8A6A45", groovePeak: 0.12,
-	rim: "#8A0C18", rimOpacity: "0.14",
-	labelTop: "#C61B2C", labelBottom: "#8A0C18",
-	labelRing: "#FFF6F2", spindle: "#FBF2E5",
-	armTop: "#D02436", armBottom: "#8A0C18", armCap: "#FBE9D6",
-	sheen: "#FFFFFF",
+	discTop: "#2a2834", discMid: "#18161e", discEnd: "#0c0a10",
+	groove: "#ffffff", groovePeak: 0.05,
+	rim: "#ffffff", rimOpacity: "0.10",
+	labelTop: "#a040ff", labelBottom: "#3a0870",
+	labelRing: "#ffffff", spindle: "#1c1c2c",
+	armTop: "#e8e4f0", armBottom: "#282030", armCap: "#c0bcd0",
+	bgStart: "#c8b8f0", bgEnd: "#120820",
 }
 
 // icons are the documents drawn, with the PNG rendered from each and the
@@ -137,76 +133,54 @@ func armSVG(top, bottom, cap string) string {
 func recordSVG(p palette) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `<defs>
-<radialGradient id="d" cx="%[1]s" cy="%[2]s" r="%[3]s" gradientUnits="userSpaceOnUse">
-<stop offset="0" stop-color="%[4]s"/><stop offset="0.62" stop-color="%[5]s"/><stop offset="1" stop-color="%[6]s"/></radialGradient>
-<clipPath id="c"><circle cx="%[1]s" cy="%[2]s" r="%[3]s"/></clipPath>
+<linearGradient id="d" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0" stop-color="%[1]s"/><stop offset=".5" stop-color="%[2]s"/>
+<stop offset="1" stop-color="%[3]s"/></linearGradient>
+<linearGradient id="g" x1="0" y1="0" x2=".6" y2=".8">
+<stop offset="0" stop-color="#fff" stop-opacity=".10"/>
+<stop offset=".35" stop-color="#fff" stop-opacity=".03"/>
+<stop offset=".7" stop-color="#fff" stop-opacity="0"/></linearGradient>
+<linearGradient id="r" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0" stop-color="%[4]s" stop-opacity=".16"/>
+<stop offset=".35" stop-color="%[4]s" stop-opacity=".04"/>
+<stop offset=".65" stop-color="%[4]s" stop-opacity="0"/></linearGradient>
 </defs>
-<circle cx="%[1]s" cy="%[2]s" r="%[3]s" fill="url(#d)"/>
-<g clip-path="url(#c)">
-`, n(rec.cx), n(rec.cy), n(rec.r), p.discTop, p.discMid, p.discEnd)
-	// Marbling, the fat through the meat, where a record has its grooves.
-	for _, v := range []struct {
-		d       string
-		width   float64
-		opacity float64
-	}{
-		{"M-180 470 C 40 320 250 630 440 500 S 780 350 1060 500", 30, 0.9},
-		{"M-180 650 C 60 550 250 830 470 690 S 790 550 1060 690", 16, 0.75},
-		{"M-140 300 C 100 190 300 410 520 300 S 800 180 1060 300", 11, 0.5},
-		{"M-160 870 C 90 760 280 1000 520 870 S 810 740 1070 870", 20, 0.65},
-		{"M60 130 C 230 310 370 110 530 230", 9, 0.45},
-		{"M280 1060 C 370 870 540 1000 670 820", 13, 0.5},
-		{"M600 150 C 700 270 780 190 890 300", 7, 0.4},
-		{"M-120 1010 C 50 900 220 1080 390 980", 12, 0.5},
-	} {
-		fmt.Fprintf(&b, `<path d="%s" fill="none" stroke="%s" stroke-opacity="%s" stroke-width="%s" stroke-linecap="round"/>`+"\n",
-			v.d, p.vein, n(v.opacity*p.veinPeak), n(v.width))
+<circle cx="%[5]s" cy="%[6]s" r="%[7]s" fill="url(#d)"/>
+`, p.discTop, p.discMid, p.discEnd, p.rim,
+		n(rec.cx), n(rec.cy), n(rec.r))
+	// Uniform grooves at constant low opacity — no banding.
+	for r := rec.r*0.30; r < rec.r-10; r += 3.5 {
+		fmt.Fprintf(&b, `<circle cx="%s" cy="%s" r="%s" fill="none" stroke="%s" stroke-opacity="%s" stroke-width="1.3"/>`+"\n",
+			n(rec.cx), n(rec.cy), n(r), p.groove, n(p.groovePeak))
 	}
-	// Grooves, unevenly bright like the bands of tracks.
-	for i, r := 0, rec.r*0.42; r < rec.r-12; i, r = i+1, r+7 {
-		fmt.Fprintf(&b, `<circle cx="%s" cy="%s" r="%s" fill="none" stroke="%s" stroke-opacity="%s" stroke-width="1.4"/>`+"\n",
-			n(rec.cx), n(rec.cy), n(r), p.groove, n(p.groovePeak*[]float64{0.62, 0.95, 0.5, 0.85}[i%4]))
-	}
-	b.WriteString(sheen(-62, 54, 0.16, rec.r*0.39, rec.r-10, p.sheen))
-	b.WriteString(sheen(118, 54, 0.11, rec.r*0.39, rec.r-10, p.sheen))
-	b.WriteString("</g>")
-	fmt.Fprintf(&b, `
-<circle cx="%[1]s" cy="%[2]s" r="%[3]s" fill="none" stroke="%[4]s" stroke-opacity="%[5]s" stroke-width="3"/>`,
-		n(rec.cx), n(rec.cy), n(rec.r-8), p.rim, p.rimOpacity)
+	fmt.Fprintf(&b, `<circle cx="%[1]s" cy="%[2]s" r="%[3]s" fill="url(#g)"/>
+<circle cx="%[1]s" cy="%[2]s" r="%[3]s" fill="none" stroke="url(#r)" stroke-width="6"/>
+`,
+		n(rec.cx), n(rec.cy), n(rec.r))
 	return svg(b.String())
 }
 
-// sheen is a soft band of reflected light across the grooves, centered on
-// the angle mid, in degrees: slices whose opacity falls off smoothly from
-// the band's middle, as SVG has no conic gradient.
-func sheen(mid, width, peak, r0, r1 float64, color string) string {
-	const slices = 48
-	pt := func(a, r float64) string {
-		a *= math.Pi / 180
-		return n(rec.cx+math.Cos(a)*r) + " " + n(rec.cy+math.Sin(a)*r)
-	}
-	var b strings.Builder
-	for i := range slices {
-		a0 := mid - width/2 + width*float64(i)/slices
-		a1 := a0 + width/slices + 0.15 // overlap, so no seams show
-		t := (float64(i)+0.5)/slices*2 - 1
-		o := math.Round(peak*math.Exp(-t*t*3.2)*1000) / 1000
-		fmt.Fprintf(&b, `<path d="M%sL%sA%s %s 0 0 1 %sL%sA%s %s 0 0 0 %sZ" fill="%s" fill-opacity="%s"/>`+"\n",
-			pt(a0, r0), pt(a0, r1), n(r1), n(r1), pt(a1, r1), pt(a1, r0), n(r0), n(r0), pt(a0, r0), color, n(o))
-	}
-	return b.String()
-}
 
 func labelSVG(p palette) string {
 	return svg(fmt.Sprintf(`<defs>
-<linearGradient id="l" x1="0" y1="0" x2="0" y2="1">
-<stop offset="0" stop-color="%[6]s"/><stop offset="1" stop-color="%[7]s"/></linearGradient>
+<radialGradient id="l" cx="%[1]s" cy="%[2]s" r="%[3]s" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="%[6]s"/><stop offset=".45" stop-color="%[7]s"/>
+<stop offset="1" stop-color="%[7]s"/></radialGradient>
 </defs>
 <circle cx="%[1]s" cy="%[2]s" r="%[3]s" fill="url(#l)"/>
-<circle cx="%[1]s" cy="%[2]s" r="%[4]s" fill="none" stroke="%[8]s" stroke-opacity="0.28" stroke-width="3"/>
-<circle cx="%[1]s" cy="%[2]s" r="%[5]s" fill="%[9]s"/>`,
-		n(rec.cx), n(rec.cy), n(rec.r*0.358), n(rec.r*0.247), n(rec.r*0.052),
-		p.labelTop, p.labelBottom, p.labelRing, p.spindle))
+<circle cx="%[1]s" cy="%[2]s" r="%[4]s" fill="none" stroke="%[8]s" stroke-opacity="0.22" stroke-width="2"/>
+<circle cx="%[1]s" cy="%[2]s" r="%[5]s" fill="none" stroke="%[8]s" stroke-opacity="0.12" stroke-width="1.5"/>
+<circle cx="%[1]s" cy="%[2]s" r="%[9]s" fill="%[10]s"/>
+<circle cx="%[1]s" cy="%[2]s" r="%[11]s" fill="%[12]s"/>`,
+		n(rec.cx), n(rec.cy),
+		n(rec.r*0.296),           // label radius
+		n(rec.r*0.25),            // inner ring 1
+		n(rec.r*0.146),           // inner ring 2
+		p.labelTop, p.labelBottom,
+		p.labelRing,
+		n(rec.r*0.041), p.spindle, // spindle hole outer
+		n(rec.r*0.014), "#2c2c2c", // spindle hole inner
+	))
 }
 
 // render has ictool draw document at the full 1024-pixel size: the icon

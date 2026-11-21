@@ -1,13 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
 <defs>
-<linearGradient id="m" x1="0" y1="0" x2="1" y2="1">
-<stop offset="0" stop-color="#5A5A62"/><stop offset="1" stop-color="#141416"/></linearGradient>
+<linearGradient id="arm" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0"   stop-color="#f0eeee"/>
+<stop offset=".3"  stop-color="#b8b4b4"/>
+<stop offset=".65" stop-color="#787474"/>
+<stop offset="1"   stop-color="#303030"/>
+</linearGradient>
+<radialGradient id="piv" cx="757" cy="162" r="52" gradientUnits="userSpaceOnUse">
+<stop offset="0"   stop-color="#e8e4e8"/>
+<stop offset=".5"  stop-color="#888"/>
+<stop offset="1"   stop-color="#1c1c1c"/>
+</radialGradient>
 </defs>
-<g transform="rotate(127.52 820 214)">
-<rect x="716" y="188" width="64" height="52" rx="15" fill="url(#m)"/>
-<rect x="820" y="197" width="355.83" height="34" rx="17" fill="url(#m)"/>
-<rect x="1153.83" y="186" width="92" height="56" rx="14" fill="url(#m)" transform="rotate(28 1175.83 214)"/>
-</g>
-<circle cx="820" cy="214" r="72" fill="url(#m)"/>
-<circle cx="820" cy="214" r="27" fill="#D9D5D8"/>
+<rect x="510" y="230" width="430" height="22" rx="11"
+  transform="rotate(113.7 724 241)" fill="url(#arm)"/>
+<ellipse cx="800" cy="98" rx="34" ry="20"
+  transform="rotate(-24 800 98)" fill="url(#arm)"/>
+<circle cx="757" cy="162" r="46" fill="url(#piv)"/>
+<circle cx="757" cy="162" r="18" fill="#161616"/>
+<circle cx="757" cy="162" r="6"  fill="#363636"/>
+<rect x="-24" y="-9" width="48" height="22" rx="7"
+  transform="translate(638 432) rotate(23.7)" fill="#c8c4c8"/>
+<line x1="634" y1="444" x2="630" y2="468"
+  stroke="#888" stroke-width="3" stroke-linecap="round"/>
 </svg>
