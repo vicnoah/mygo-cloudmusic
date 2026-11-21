@@ -3,6 +3,7 @@ package mpv
 import (
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -148,15 +149,20 @@ func Load() error {
 }
 
 // ProbePath initializes a component in the short-lived process started by the installer.
-func ProbePath(path string) error {
+func ProbePath(path string, progress io.Writer) error {
+	stage := func(name string) {
+		fmt.Fprintln(progress, probeStagePrefix+name)
+	}
+	stage("加载动态库")
 	library, err := bindLibrary(path)
 	if err != nil {
 		return err
 	}
-	handle, err := initializeInstance(library, map[string]string{"ao": "null"})
+	handle, err := initializeInstance(library, map[string]string{"ao": "null"}, stage)
 	if err != nil {
 		return err
 	}
+	stage("关闭解码器")
 	library.terminateDestroy(handle)
 	return nil
 }
@@ -218,14 +224,17 @@ func NewInstance(opts ...map[string]string) (*Instance, error) {
 	if len(opts) != 0 {
 		options = opts[0]
 	}
-	handle, err := initializeInstance(mpvLib, options)
+	handle, err := initializeInstance(mpvLib, options, nil)
 	if err != nil {
 		return nil, err
 	}
 	return &Instance{handle: handle}, nil
 }
 
-func initializeInstance(library cFuncs, options map[string]string) (uintptr, error) {
+func initializeInstance(library cFuncs, options map[string]string, stage func(string)) (uintptr, error) {
+	if stage != nil {
+		stage("创建解码器")
+	}
 	handle := library.create()
 	if handle == 0 {
 		return 0, errors.New("mpv: failed to create instance")
@@ -264,6 +273,9 @@ func initializeInstance(library cFuncs, options map[string]string) (uintptr, err
 		setOption(k, v)
 	}
 
+	if stage != nil {
+		stage("初始化解码器")
+	}
 	if code := library.initialize(handle); code < 0 {
 		library.terminateDestroy(handle)
 		return 0, fmt.Errorf("mpv: initialize failed with error code %d", code)

@@ -17,7 +17,7 @@ import (
 // A child validates the installed component with the same native API used by the application.
 func TestMPVComponentProbeChild(t *testing.T) {
 	if path := os.Getenv("WAGYU_MPV_PROBE_CHILD"); path != "" {
-		if err := ProbePath(path); err != nil {
+		if err := ProbePath(path, os.Stderr); err != nil {
 			t.Fatal(err)
 		}
 	}

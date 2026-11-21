@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -260,6 +261,8 @@ func cleanComponents(root, keep, loaded string) error {
 	return cleanupErr
 }
 
+const probeStagePrefix = "mpv probe: "
+
 func runComponentProbe(ctx context.Context, library string) error {
 	executable, err := os.Executable()
 	if err != nil {
@@ -269,16 +272,32 @@ func runComponentProbe(ctx context.Context, library string) error {
 	configureProbe(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		detail := strings.TrimSpace(string(output))
 		if ctx.Err() != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				stage := "启动探测进程"
+				for line := range strings.SplitSeq(detail, "\n") {
+					if name, ok := strings.CutPrefix(line, probeStagePrefix); ok {
+						stage = strings.TrimSpace(name)
+					}
+				}
+				return fmt.Errorf("mpv: %s超时（%w）", stage, ctx.Err())
+			}
 			return ctx.Err()
 		}
-		return fmt.Errorf("mpv: load probe failed (%w): %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("mpv: load probe failed (%w): %s", err, detail)
 	}
 	return nil
 }
 
 func checkComponent(ctx context.Context, library string, manifest componentManifest) error {
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	timeout := 12 * time.Second
+	if runtime.GOOS == "darwin" {
+		// A freshly extracted component loads the entire signed dylib tree.
+		// Allow for cold macOS library validation on slower machines.
+		timeout = 45 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if err := componentProbe(ctx, library); err != nil {
 		return fmt.Errorf("解码组件 %s（最低要求 %s）: %w", manifest.MPVVersion, manifest.MinimumRuntime, err)

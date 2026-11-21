@@ -11,7 +11,7 @@ import (
 
 func main() {
 	if len(os.Args) == 3 && os.Args[1] == "--mpv-probe" {
-		if err := mpv.ProbePath(os.Args[2]); err != nil {
+		if err := mpv.ProbePath(os.Args[2], os.Stderr); err != nil {
 			log.Fatal(err)
 		}
 		return
