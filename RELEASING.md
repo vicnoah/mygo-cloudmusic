@@ -8,18 +8,22 @@
 
 ## Alpha
 
-更新 `mygo.json` 和 `CHANGELOG.md` 中的版本，然后推送匹配的 `v*-alpha.*` 标签。Release workflow 在 Ubuntu 构建全部六个目标、上传校验和，并发布为预发行。也可以在 Linux 先验证本地构建，需要 Go、jq、zip 和 NSIS。
+更新 `mygo.json` 和 `CHANGELOG.md` 中的版本，然后推送匹配的 `v*-alpha.*` 标签。Release workflow 在 Ubuntu 构建全部六个目标、上传校验和，并发布为预发行。也可以在 Linux 先验证本地构建，需要 Go、jq、zip、NSIS、hfsprogs 和 7zip。先运行 `bash scripts/build-dmg-tools.sh build/dmg-tools`，并把生成的工具目录加入 PATH。
 
 ```bash
 go test ./internal/...
 bash scripts/build-alpha.sh
 ```
 
-macOS 产物是含 `.app` 的 ZIP，Linux 构建省去 Developer ID 签名及 Apple 公证。Windows 安装程序未签名。Alpha 通过 GitHub Release 手动下载。
+macOS 提供 DMG 和含 `.app` 的 ZIP，Linux 提供 DEB 和 tar.gz。两个架构的 macOS 包均由 Ubuntu 构建，未做 Apple 公证。Windows 安装程序未签名。Alpha 通过 GitHub Release 手动下载。
 
 ## 稳定版
 
-提交源码及版本，推送稳定版的 `v*` 标签。GitHub Actions 在 Ubuntu 上构建全部六个目标，使用 `MYGO_UPDATER_PRIVATE_KEY` 签名更新清单，上传完成后发布为最新稳定版。macOS 构建使用包含 `.app` 的归档。
+提交源码及版本，推送稳定版的 `v*` 标签。GitHub Actions 在 Ubuntu 上构建全部六个目标，使用 `MYGO_UPDATER_PRIVATE_KEY` 签名更新清单，上传完成后发布为最新稳定版。macOS 提供 DMG 和包含 `.app` 的更新归档。Linux 提供 DEB、RPM 和更新归档。
+
+## 为已发布版本补安装包
+
+运行 **Supplement release installers** workflow，输入已发布标签。它使用发布时的 macOS 应用归档制作 DMG，并从 Alpha 标签的源码构建 DEB。新增资产会纳入该版本的校验和。
 
 ## MPV 解码组件
 

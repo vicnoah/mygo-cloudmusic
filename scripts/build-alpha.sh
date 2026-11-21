@@ -16,15 +16,19 @@ GOWORK=off go tool mygo build -sign - -skip-dmg -skip-notarize -o "$build" \
 assets=()
 for arch in amd64 arm64; do
   mac="$slug-$version-darwin-$arch.zip"
+  dmg="$slug-$version-$arch.dmg"
+  deb="${slug}_${version/-/\~}_${arch}.deb"
   windows="$slug-setup-$version-$arch.exe"
   linux="$slug-$version-linux-$arch.tar.gz"
   (
     cd "$build/darwin-$arch"
     zip -qry "$output/$mac" ./*.app
+    bash "$repo/scripts/build-dmg.sh" ./*.app "$output/$dmg"
   )
   cp "$build/windows-$arch/$windows" "$output/"
   cp "$build/linux-$arch/$linux" "$output/"
-  assets+=("$mac" "$windows" "$linux")
+  cp "$build/linux-$arch/$deb" "$output/"
+  assets+=("$mac" "$dmg" "$windows" "$linux" "$deb")
 done
 (
   cd "$output"

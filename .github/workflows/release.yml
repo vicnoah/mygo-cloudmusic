@@ -20,8 +20,12 @@ jobs:
           go-version-file: go.mod
       - name: Check the version
         run: test "$GITHUB_REF_NAME" = "v$(jq -r .version mygo.json)"
-      - name: Install NSIS
-        run: sudo apt-get update && sudo apt-get install -y nsis
+      - name: Prepare installer tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nsis hfsprogs 7zip libssl-dev zlib1g-dev libbz2-dev liblzma-dev
+          bash scripts/build-dmg-tools.sh "$RUNNER_TEMP/dmg-tools"
+          printf '%s\n' "$RUNNER_TEMP/dmg-tools" >> "$GITHUB_PATH"
       - name: Test the host
         run: GOWORK=off go test -mod=readonly ./...
       - name: Prepare the draft release
@@ -37,7 +41,7 @@ jobs:
             flags=()
             if [[ $GITHUB_REF_NAME == *-alpha.* ]]; then
               flags=(--prerelease --latest=false)
-              printf '\nmacOS 提供包含 .app 的 ZIP，由 Ubuntu 交叉构建。此 Alpha 的 macOS 产物未公证。\n' >> "$RUNNER_TEMP/notes.md"
+              printf '\nmacOS 提供 DMG 和包含 .app 的 ZIP，由 Ubuntu 交叉构建。此 Alpha 的 macOS 产物未公证。\n' >> "$RUNNER_TEMP/notes.md"
             fi
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
               --draft --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"
@@ -54,7 +58,7 @@ jobs:
           sha256sum -c SHA256SUMS
           test "$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
           gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --clobber \
-            ./*.zip ./*.exe ./*.tar.gz SHA256SUMS
+            ./*.zip ./*.dmg ./*.deb ./*.exe ./*.tar.gz SHA256SUMS
           gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
       - name: Publish stable release
         if: ${{ !contains(github.ref_name, '-alpha.') }}
@@ -63,10 +67,18 @@ jobs:
           MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
         run: |
           test "$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
-          go tool mygo build -sign - -skip-dmg -skip-notarize -upload \
+          build="$RUNNER_TEMP/stable-build"
+          go tool mygo build -sign - -skip-dmg -skip-notarize -o "$build" -upload \
             -platform "darwin/amd64,darwin/arm64,windows/amd64,windows/arm64,linux/amd64,linux/arm64"
           version=${GITHUB_REF_NAME#v}
           slug=$(jq -er .slug mygo.json)
+          dmgs=()
+          for arch in amd64 arm64; do
+            dmg="$build/$slug-$version-$arch.dmg"
+            bash scripts/build-dmg.sh "$build/darwin-$arch/"*.app "$dmg"
+            dmgs+=("$dmg")
+          done
+          bash scripts/add-installers-to-release.sh "$GITHUB_REF_NAME" "${dmgs[@]}"
           assets=$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
             --json assets --jq '.assets[] | select(.size > 0) | .name')
           require_asset() {
@@ -78,6 +90,8 @@ jobs:
           require_asset SHA256SUMS
           for arch in amd64 arm64; do
             require_asset "$slug-setup-$version-$arch.exe"
+            require_asset "$slug-$version-$arch.dmg"
+            require_asset "${slug}_${version}_${arch}.deb"
             for os in darwin linux windows; do
               require_asset "$slug-$version-$os-$arch.tar.gz"
               require_asset "update-$os-$arch.json"
