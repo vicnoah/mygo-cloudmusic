@@ -41,7 +41,6 @@ func (a *app) mpvReady() bool {
 
 var (
 	downloadMPV = mpv.Download
-	loadMPV     = mpv.Load
 	removeMPV   = mpv.Delete
 	refreshDLNA = (*dlna.Controller).RefreshDevices
 )
@@ -76,9 +75,9 @@ func (a *app) startMPVDownload() (protocol.DesktopTask, error) {
 			cancel()
 			a.mpvCancel = nil
 			if err == nil {
-				err = loadMPV()
-				if err == nil {
-					a.syncMPVSettings()
+				a.syncMPVSettings()
+				if mpv.NeedsRestart() {
+					task.Message = "解码组件已下载，下次启动后使用新版本"
 				}
 			}
 			if err != nil {

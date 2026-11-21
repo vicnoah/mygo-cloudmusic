@@ -97,9 +97,6 @@ func (h platformHost) DecoderStatus() pluginapi.DecoderStatus {
 	}
 	if !status.Downloading {
 		status.Downloaded = mpv.IsDownloaded()
-		if !status.Downloaded {
-			status.SystemPath = mpv.SystemPath()
-		}
 	}
 	if a.settings.UseMPV && status.Ready && a.pl != nil {
 		for _, device := range a.pl.AudioDevices() {

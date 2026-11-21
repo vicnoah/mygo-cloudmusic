@@ -15,6 +15,7 @@ import (
 	"github.com/waygu-music-plugin/sdk/pluginapi/artwork"
 
 	"waygu-music/internal/player"
+	"waygu-music/internal/player/mpv"
 )
 
 // app owns the native windows and the services shared by platform plugins.
@@ -122,6 +123,9 @@ func run(registrations []appplatform.Registration, managed bool) error {
 	// opens its window again, instead of running a second app beside it.
 	if !mygo.App.RequestSingleInstanceLock() {
 		return nil
+	}
+	if err := mpv.Restore(context.Background()); err != nil {
+		log.Printf("restore decoder component: %v", err)
 	}
 	if err := desktop.SetApplicationIdentity(desktopApplicationID()); err != nil {
 		return err

@@ -1,9 +1,9 @@
 package mpv
 
 import (
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -11,178 +11,156 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
+	"time"
 )
 
 var (
-	baseDownloadURL  = "https://github.com/vicnoah/mygo-cloudmusic/releases/download/libmpv-" + LibVersion + "/"
-	cacheDirOverride string
+	baseDownloadURL = "https://github.com/vicnoah/mygo-cloudmusic/releases/download/mpv-components-v1/"
+	releaseKey, _   = base64.StdEncoding.DecodeString("rTpebkc591D+UvB6e7hP/WigaCvcqExcyG7m5PREahM=")
+	httpClient      = &http.Client{Timeout: 5 * time.Minute}
 )
 
-// SetBaseURL overrides the download release base URL (useful for testing or mirrors).
-func SetBaseURL(u string) {
-	baseDownloadURL = u
-}
-
-// SetCacheDir overrides the cache directory for testing.
-func SetCacheDir(d string) {
-	cacheDirOverride = d
-}
-
-// CacheDir returns the directory path where downloaded libmpv binaries are kept.
-func CacheDir() (string, error) {
-	if cacheDirOverride != "" {
-		return cacheDirOverride, nil
-	}
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		cache = os.TempDir()
-	}
-	return filepath.Join(cache, "mygo-cloudmusic", "libmpv-"+LibVersion), nil
-}
-
-// TargetFile returns the target library file path inside CacheDir for the current platform.
-func TargetFile() (string, error) {
-	dir, err := CacheDir()
-	if err != nil {
-		return "", err
-	}
-	asset, ok := NativeAssets[Platform()]
-	if !ok {
-		return "", fmt.Errorf("mpv: unsupported platform %s", Platform())
-	}
-	return filepath.Join(dir, asset.Name), nil
-}
-
-// IsDownloaded reports whether the library has already been downloaded to the cache directory.
-func IsDownloaded() bool {
-	p, err := TargetFile()
-	if err != nil {
-		return false
-	}
-	fi, err := os.Stat(p)
-	return err == nil && fi.Size() > 1024
-}
-
-// SystemPath searches system paths to see if libmpv is already installed on the host.
-func SystemPath() string {
-	for _, name := range SystemLibNames() {
-		h, err := openLibrary(name)
-		if err == nil && h != 0 {
-			// On Unix/Windows, test if mpv_create exists
-			if sym, _ := librarySymbol(h, "mpv_create"); sym != 0 {
-				return name
-			}
-		}
-	}
-	return ""
-}
-
-// Ready reports whether libmpv is available to use (either system-installed or downloaded).
-func Ready() bool {
-	return IsDownloaded() || SystemPath() != ""
-}
-
-var (
-	dlMu   sync.Mutex
-	cancel context.CancelFunc
-)
-
-// Download downloads and unpacks the platform's libmpv binary into CacheDir.
+// Download validates an official component in a staging directory before replacing the active record.
 func Download(ctx context.Context, onProgress func(done, total int64)) error {
 	dlMu.Lock()
 	defer dlMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	asset, ok := NativeAssets[Platform()]
-	if !ok {
-		return fmt.Errorf("mpv: no precompiled asset for platform %s", Platform())
-	}
-
-	dir, err := CacheDir()
+	index, err := fetchRelease(ctx)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("mpv: mkdir cache: %w", err)
-	}
-
-	targetPath := filepath.Join(dir, asset.Name)
-	downloadURL := baseDownloadURL + asset.Asset
-
-	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("mpv: fetch %s: %w", downloadURL, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("mpv: download failed: HTTP %s", resp.Status)
-	}
-
-	total := resp.ContentLength
-	if total <= 0 {
-		total = asset.GzSize
-	}
-
-	// Decompress gzip on the fly
-	gzr, err := gzip.NewReader(&progressReader{
-		r:          resp.Body,
-		total:      total,
-		onProgress: onProgress,
-	})
-	if err != nil {
-		return fmt.Errorf("mpv: gzip reader: %w", err)
-	}
-	defer gzr.Close()
-
-	f, err := os.CreateTemp(dir, asset.Name+"-*.part")
-	if err != nil {
-		return err
-	}
-	tmpFile := f.Name()
-	defer os.Remove(tmpFile)
-
-	hasher := sha256.New()
-	mw := io.MultiWriter(f, hasher)
-
-	if _, err := io.Copy(mw, gzr); err != nil {
-		f.Close()
-		return fmt.Errorf("mpv: unpack: %w", err)
-	}
-	if err := errors.Join(f.Chmod(0755), f.Sync(), f.Close()); err != nil {
-		return err
-	}
-
-	if asset.SHA256 != "" {
-		sum := hex.EncodeToString(hasher.Sum(nil))
-		if sum != asset.SHA256 {
-			return errors.New("mpv: checksum mismatch for downloaded library")
+	var asset releaseAsset
+	for _, candidate := range index.Assets {
+		if candidate.Platform == Platform() {
+			asset = candidate
+			break
 		}
 	}
+	if asset.Archive == "" {
+		return fmt.Errorf("mpv: no official component for %s", Platform())
+	}
+	root, err := CacheDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return err
+	}
+	archive, err := os.CreateTemp(root, ".download-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(archive.Name())
+	if err := errors.Join(fetchArchive(ctx, asset, archive, onProgress), archive.Close()); err != nil {
+		return err
+	}
 
+	stage, err := os.MkdirTemp(root, componentPrefix)
+	if err != nil {
+		return err
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.RemoveAll(stage)
+		}
+	}()
+	manifest, err := unpackComponent(ctx, archive.Name(), stage, index.Version)
+	if err != nil {
+		return fmt.Errorf("mpv: unpack component: %w", err)
+	}
+	library := filepath.Join(stage, manifest.Library)
+	if err := checkComponent(ctx, library, manifest); err != nil {
+		return err
+	}
+
+	loadMu.Lock()
+	defer loadMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return os.Rename(tmpFile, targetPath)
+	if err := writeActive(root, installedComponent{Directory: filepath.Base(stage), Manifest: manifest}); err != nil {
+		return err
+	}
+	keep = true
+	installedPath = library
+	loadFailed = false
+	return nil
 }
 
-// Delete removes the downloaded libmpv files from the cache directory.
-func Delete() error {
-	dlMu.Lock()
-	defer dlMu.Unlock()
-	dir, err := CacheDir()
+func fetchRelease(ctx context.Context) (releaseIndex, error) {
+	body, err := openDownload(ctx, "index.json")
+	if err != nil {
+		return releaseIndex{}, err
+	}
+	defer body.Close()
+	raw, err := io.ReadAll(io.LimitReader(body, maxManifestSize+1))
+	if err != nil {
+		return releaseIndex{}, err
+	}
+	if len(raw) > maxManifestSize {
+		return releaseIndex{}, errors.New("mpv: oversized release index")
+	}
+	return parseRelease(raw, releaseKey)
+}
+
+func fetchArchive(ctx context.Context, asset releaseAsset, file *os.File, onProgress func(done, total int64)) error {
+	body, err := openDownload(ctx, asset.Archive)
 	if err != nil {
 		return err
 	}
-	return os.RemoveAll(dir)
+	defer body.Close()
+	hash := sha256.New()
+	progress := &progressReader{r: io.LimitReader(body, asset.Size+1), total: asset.Size, onProgress: onProgress}
+	size, err := io.Copy(io.MultiWriter(file, hash), progress)
+	if err != nil {
+		return fmt.Errorf("mpv: download %s: %w", asset.Archive, err)
+	}
+	if size != asset.Size || hex.EncodeToString(hash.Sum(nil)) != asset.SHA256 {
+		return errors.New("mpv: download size or checksum mismatch")
+	}
+	return nil
+}
+
+func openDownload(ctx context.Context, name string) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseDownloadURL+name, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("mpv: download %s: %w", name, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("mpv: download %s: HTTP %s", name, resp.Status)
+	}
+	return resp.Body, nil
+}
+
+// Delete deactivates the component immediately and leaves an in-use directory for startup cleanup.
+func Delete() error {
+	dlMu.Lock()
+	defer dlMu.Unlock()
+	root, err := CacheDir()
+	if err != nil {
+		return err
+	}
+	loadMu.Lock()
+	defer loadMu.Unlock()
+	if err := os.Remove(filepath.Join(root, "active.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	installedPath = ""
+	loadFailed = false
+	var inUse string
+	if loadedPath != "" {
+		loadDisabled = true
+		inUse = filepath.Dir(loadedPath)
+	}
+	return cleanComponents(root, "", inUse)
 }
 
 type progressReader struct {
@@ -196,7 +174,7 @@ func (p *progressReader) Read(b []byte) (int, error) {
 	n, err := p.r.Read(b)
 	p.done += int64(n)
 	if p.onProgress != nil {
-		p.onProgress(p.done, p.total)
+		p.onProgress(min(p.done, p.total), p.total)
 	}
 	return n, err
 }

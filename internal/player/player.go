@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"math/rand/v2"
 	"strings"
@@ -1063,16 +1064,16 @@ func (p *Player) loadTrack(at, skipped int, play bool, from time.Duration, start
 					var err error
 					engine, err = mpv.NewEngine(p.mpvCfg)
 					if err != nil {
-						p.err = err.Error()
-						p.loading = false
-						p.playing = false
-						p.sync()
-						return
+						log.Printf("start MPV decoder: %v", err)
+					} else {
+						p.mpvOut = engine
+						p.rgSet = false
 					}
-					p.mpvOut = engine
-					p.rgSet = false
 				}
-				playURL := p.mpvURL(ctx, &t, media)
+				var playURL string
+				if engine != nil {
+					playURL = p.mpvURL(ctx, &t, media)
+				}
 
 				if playURL != "" {
 					engine.OnPlaybackRestart(func() {

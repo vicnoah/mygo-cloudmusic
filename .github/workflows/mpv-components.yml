@@ -1,0 +1,103 @@
+name: MPV components
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Component version such as 1.0.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mpv-components
+
+jobs:
+  linux:
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Package the Debian 12 dependency closure
+        env:
+          MPV_VERSION: ${{ inputs.version }}
+          MPV_ARCH: ${{ matrix.arch }}
+        run: |
+          [[ "$MPV_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mkdir -p component-output
+          docker run --rm -v "$PWD:/work" -w /work \
+            -e MPV_VERSION -e MPV_ARCH debian:12-slim bash -ec '
+              apt-get update -qq
+              apt-get install -qy --no-install-recommends libmpv2=0.35.1-4 binutils patchelf python3
+              stage=$(mktemp -d)
+              bash scripts/mpv/stage-linux.sh "$stage"
+              python3 scripts/mpv/package.py "$MPV_VERSION" "linux-$MPV_ARCH" "$stage" component-output
+            '
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}
+          path: component-output/*.zip
+          compression-level: 0
+          if-no-files-found: error
+
+  desktop:
+    strategy:
+      matrix:
+        platform: [darwin-amd64, darwin-arm64, windows-amd64, windows-arm64]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y llvm-18 zstd
+      - name: Package portable component
+        env:
+          MPV_VERSION: ${{ inputs.version }}
+          MPV_PLATFORM: ${{ matrix.platform }}
+        run: |
+          [[ "$MPV_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          bash scripts/mpv/stage-desktop.sh "$MPV_VERSION" "$MPV_PLATFORM" component-output
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.platform }}
+          path: component-output/*.zip
+          compression-level: 0
+          if-no-files-found: error
+
+  publish:
+    needs: [linux, desktop]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v8
+        with:
+          path: component-output
+          merge-multiple: true
+      - name: Sign and publish the component index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MPV_VERSION: ${{ inputs.version }}
+          MPV_RELEASE_SIGNING_KEY: ${{ secrets.MPV_RELEASE_SIGNING_KEY }}
+        run: |
+          go run ./scripts/mpv sign "$MPV_VERSION" component-output
+          tag=mpv-components-v1
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --draft --target "$GITHUB_SHA" \
+              --title "MPV decoder components" --latest=false \
+              --notes "Independently downloaded MPV components for Windows, macOS and Linux."
+          fi
+          gh release upload "$tag" component-output/*.zip
+          gh release upload "$tag" --clobber component-output/index.json
+          gh release edit "$tag" --draft=false --latest=false

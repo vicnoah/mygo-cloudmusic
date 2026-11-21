@@ -45,34 +45,6 @@ func TestMPVLoadsAtRequestedPosition(t *testing.T) {
 	}
 }
 
-// Tests metadata and path resolution for libmpv assets across platforms.
-func TestMPVMeta(t *testing.T) {
-	if Platform() == "" {
-		t.Fatal("expected non-empty platform")
-	}
-
-	names := SystemLibNames()
-	if len(names) == 0 {
-		t.Fatal("expected system lib names")
-	}
-
-	dir, err := CacheDir()
-	if err != nil {
-		t.Fatalf("CacheDir: %v", err)
-	}
-	if dir == "" {
-		t.Fatal("expected non-empty CacheDir")
-	}
-
-	target, err := TargetFile()
-	if err != nil {
-		t.Fatalf("TargetFile: %v", err)
-	}
-	if target == "" {
-		t.Fatal("expected non-empty TargetFile")
-	}
-}
-
 // Tests MPV engine initialization and basic control commands if libmpv is available.
 func TestMPVEngine(t *testing.T) {
 	if !Ready() {
@@ -166,39 +138,6 @@ func TestMPVEngine(t *testing.T) {
 	}
 	if engine.Closed() {
 		t.Error("expected engine not to be closed after Stop()")
-	}
-}
-
-// Tests downloading the real libmpv asset from the GitHub release.
-func TestDownloadFromRelease(t *testing.T) {
-	if os.Getenv("LIVE") == "" {
-		t.Skip("skipping network download test unless LIVE is set")
-	}
-	tmp := t.TempDir()
-	SetCacheDir(tmp)
-	defer SetCacheDir("")
-
-	var lastDone, lastTotal int64
-	err := Download(t.Context(), func(done, total int64) {
-		lastDone = done
-		lastTotal = total
-	})
-	if err != nil {
-		t.Fatalf("Download from release failed: %v", err)
-	}
-
-	if lastDone == 0 || lastDone != lastTotal {
-		t.Errorf("expected download to complete, got done=%d total=%d", lastDone, lastTotal)
-	}
-
-	if !IsDownloaded() {
-		t.Error("expected IsDownloaded to report true after successful download")
-	}
-
-	target, _ := TargetFile()
-	fi, err := os.Stat(target)
-	if err != nil || fi.Size() == 0 {
-		t.Fatalf("downloaded file stat error: %v", err)
 	}
 }
 

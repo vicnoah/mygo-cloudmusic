@@ -69,10 +69,10 @@ func TestDesktopDownloadIgnoresCanceledWorker(t *testing.T) {
 	}
 	workers := make(chan runningDownload, 2)
 	shutdown := make(chan struct{})
-	download, load := downloadMPV, loadMPV
+	download := downloadMPV
 	defer func() {
 		close(shutdown)
-		downloadMPV, loadMPV = download, load
+		downloadMPV = download
 	}()
 	downloadMPV = func(ctx context.Context, progress func(int64, int64)) error {
 		finish := make(chan error, 1)
@@ -83,11 +83,6 @@ func TestDesktopDownloadIgnoresCanceledWorker(t *testing.T) {
 		case <-shutdown:
 			return context.Canceled
 		}
-	}
-	var loads int
-	loadMPV = func() error {
-		loads++
-		return nil
 	}
 
 	old, err := use(protocol.TaskDecoderDownload, 0)
@@ -111,8 +106,8 @@ func TestDesktopDownloadIgnoresCanceledWorker(t *testing.T) {
 	oldWorker.finish <- nil
 	desktopTestReceive(t, posts)()
 	status := (platformHost{a: a}).DecoderStatus()
-	if !status.Downloading || status.DownloadTask.ID != current.ID || status.Done != 24 || loads != 0 {
-		t.Fatalf("late worker changed the active download: %+v, loads=%d", status, loads)
+	if !status.Downloading || status.DownloadTask.ID != current.ID || status.Done != 24 {
+		t.Fatalf("late worker changed the active download: %+v", status)
 	}
 	if _, err := use("decoder-cancel", old.ID); err == nil || worker.ctx.Err() != nil {
 		t.Fatalf("late cancel affected its replacement: %v", err)
@@ -120,8 +115,8 @@ func TestDesktopDownloadIgnoresCanceledWorker(t *testing.T) {
 	worker.finish <- nil
 	desktopTestReceive(t, posts)()
 	status = bridge.LocalSnapshot(bridge.WireSnapshot(capturePluginSnapshot(a, nil))).Decoder
-	if status.Downloading || status.DownloadTask.Phase != protocol.TaskSucceeded || loads != 1 {
-		t.Fatalf("completed retry was not exposed as success: %+v, loads=%d", status, loads)
+	if status.Downloading || status.DownloadTask.Phase != protocol.TaskSucceeded {
+		t.Fatalf("completed retry was not exposed as success: %+v", status)
 	}
 	oldResult, err := use(protocol.HostDesktopTask, old.ID)
 	if err != nil || oldResult != stopped {
@@ -138,10 +133,10 @@ func TestDesktopDeleteReplacesPendingInstall(t *testing.T) {
 	removing := make(chan struct{})
 	deleted := make(chan error, 1)
 	stop := make(chan struct{})
-	download, load, remove := downloadMPV, loadMPV, removeMPV
+	download, remove := downloadMPV, removeMPV
 	defer func() {
 		close(stop)
-		downloadMPV, loadMPV, removeMPV = download, load, remove
+		downloadMPV, removeMPV = download, remove
 	}()
 	downloadMPV = func(ctx context.Context, _ func(int64, int64)) error {
 		started <- ctx
@@ -151,10 +146,6 @@ func TestDesktopDeleteReplacesPendingInstall(t *testing.T) {
 		case <-stop:
 			return context.Canceled
 		}
-	}
-	loadMPV = func() error {
-		t.Error("a replaced download tried to load the decoder")
-		return nil
 	}
 	removeMPV = func() error {
 		close(removing)

@@ -75,89 +75,113 @@ type cLogMessage struct {
 }
 
 var (
-	loadMu sync.Mutex
-	loaded bool
-	mpvLib cFuncs
+	loadMu        sync.Mutex
+	installedPath string
+	loadedPath    string
+	loadFailed    bool
+	loadDisabled  bool
+	mpvLib        cFuncs
 )
 
-// Available reports whether libmpv has been successfully loaded.
-func Available() bool {
+// Ready is set after a downloaded component passes the initialization probe.
+func Ready() bool {
 	loadMu.Lock()
 	defer loadMu.Unlock()
-	return loaded
+	return installedPath != "" && !loadFailed && !loadDisabled
 }
 
-// Load attempts to load libmpv from the downloaded cache directory or host system paths.
+// IsDownloaded reports whether a verified component is selected for this or the next process.
+func IsDownloaded() bool {
+	loadMu.Lock()
+	defer loadMu.Unlock()
+	return installedPath != ""
+}
+
+// NeedsRestart reports whether a different installed version is already mapped in this process.
+func NeedsRestart() bool {
+	loadMu.Lock()
+	defer loadMu.Unlock()
+	return installedPath != "" && loadedPath != "" && installedPath != loadedPath
+}
+
+func setInstalledLibrary(path string) {
+	loadMu.Lock()
+	defer loadMu.Unlock()
+	installedPath, loadFailed = path, false
+}
+
+// Load binds the official installed component and keeps that version mapped until exit.
 func Load() error {
 	loadMu.Lock()
 	defer loadMu.Unlock()
-
-	if loaded {
+	if installedPath == "" || loadDisabled {
+		return ErrUnavailable
+	}
+	if loadedPath != "" {
 		return nil
 	}
-
-	// 1. Check downloaded library in cache
-	if p, err := TargetFile(); err == nil {
-		if err := loadLibraryAt(p); err == nil {
-			loaded = true
-			return nil
-		}
-	}
-
-	// 2. Check system-installed candidate paths
-	for _, name := range SystemLibNames() {
-		if err := loadLibraryAt(name); err == nil {
-			loaded = true
-			return nil
-		}
-	}
-
-	return ErrUnavailable
-}
-
-// LoadPath loads libmpv explicitly from the specified file path.
-func LoadPath(libPath string) error {
-	loadMu.Lock()
-	defer loadMu.Unlock()
-
-	if err := loadLibraryAt(libPath); err != nil {
+	library, err := bindLibrary(installedPath)
+	if err != nil {
+		loadFailed = true
 		return err
 	}
-	loaded = true
+	mpvLib, loadedPath = library, installedPath
+	loadFailed = false
 	return nil
 }
 
-func loadLibraryAt(path string) error {
-	h, err := openLibrary(path)
-	if err != nil || h == 0 {
-		return fmt.Errorf("open library %s: %w", path, err)
+// ProbePath initializes a component in the short-lived process started by the installer.
+func ProbePath(path string) error {
+	library, err := bindLibrary(path)
+	if err != nil {
+		return err
+	}
+	handle, err := initializeInstance(library, map[string]string{"ao": "null"})
+	if err != nil {
+		return err
+	}
+	library.terminateDestroy(handle)
+	return nil
+}
+
+func bindLibrary(path string) (cFuncs, error) {
+	var library cFuncs
+	handle, err := openLibrary(path)
+	if err != nil {
+		return library, fmt.Errorf("open library %s: %w", path, err)
 	}
 
 	symbols := map[string]any{
-		"mpv_client_api_version":   &mpvLib.clientAPIVersion,
-		"mpv_create":               &mpvLib.create,
-		"mpv_initialize":           &mpvLib.initialize,
-		"mpv_terminate_destroy":    &mpvLib.terminateDestroy,
-		"mpv_command":              &mpvLib.command,
-		"mpv_command_string":       &mpvLib.commandString,
-		"mpv_set_option_string":    &mpvLib.setOptionString,
-		"mpv_set_property_string":  &mpvLib.setPropertyString,
-		"mpv_get_property_string":  &mpvLib.getPropertyString,
-		"mpv_free":                 &mpvLib.free,
-		"mpv_wait_event":           &mpvLib.waitEvent,
-		"mpv_wakeup":               &mpvLib.wakeup,
-		"mpv_request_log_messages": &mpvLib.requestLogMessages,
+		"mpv_client_api_version":   &library.clientAPIVersion,
+		"mpv_create":               &library.create,
+		"mpv_initialize":           &library.initialize,
+		"mpv_terminate_destroy":    &library.terminateDestroy,
+		"mpv_command":              &library.command,
+		"mpv_command_string":       &library.commandString,
+		"mpv_set_option_string":    &library.setOptionString,
+		"mpv_set_property_string":  &library.setPropertyString,
+		"mpv_get_property_string":  &library.getPropertyString,
+		"mpv_free":                 &library.free,
+		"mpv_wait_event":           &library.waitEvent,
+		"mpv_wakeup":               &library.wakeup,
+		"mpv_request_log_messages": &library.requestLogMessages,
 	}
 
 	for symName, fnPtr := range symbols {
-		sym, err := librarySymbol(h, symName)
+		sym, err := librarySymbol(handle, symName)
 		if err != nil || sym == 0 {
-			return fmt.Errorf("missing symbol %s in %s", symName, path)
+			closeLibrary(handle)
+			return cFuncs{}, fmt.Errorf("missing symbol %s in %s", symName, path)
 		}
 		purego.RegisterFunc(fnPtr, sym)
 	}
 
-	return nil
+	// The minimum client API is 1.108 (MPV 0.34). Versions through API 2 are supported.
+	if version := library.clientAPIVersion(); version < 1<<16|108 || version>>16 > 2 {
+		closeLibrary(handle)
+		return cFuncs{}, fmt.Errorf("mpv: unsupported client API %d.%d", version>>16, version&0xffff)
+	}
+	return library, nil
 }
 
 // Instance wraps a running libmpv instance handle.
@@ -173,49 +197,65 @@ func NewInstance(opts ...map[string]string) (*Instance, error) {
 		return nil, err
 	}
 
-	handle := mpvLib.create()
+	var options map[string]string
+	if len(opts) != 0 {
+		options = opts[0]
+	}
+	handle, err := initializeInstance(mpvLib, options)
+	if err != nil {
+		loadMu.Lock()
+		loadFailed = true
+		loadMu.Unlock()
+		return nil, err
+	}
+	return &Instance{handle: handle}, nil
+}
+
+func initializeInstance(library cFuncs, options map[string]string) (uintptr, error) {
+	handle := library.create()
 	if handle == 0 {
-		return nil, errors.New("mpv: failed to create instance")
+		return 0, errors.New("mpv: failed to create instance")
 	}
 
-	inst := &Instance{handle: handle}
+	setOption := func(name, value string) {
+		cName, cValue := cStr(name), cStr(value)
+		library.setOptionString(handle, &cName[0], &cValue[0])
+	}
 
 	// Default options: audio only, no video decoding, stay idle
-	inst.SetOption("video", "no")
-	inst.SetOption("idle", "yes")
-	inst.SetOption("audio-client-name", "肥牛音乐")
-	inst.SetOption("prefetch-playlist", "yes")
+	setOption("video", "no")
+	setOption("idle", "yes")
+	setOption("audio-client-name", "肥牛音乐")
+	setOption("prefetch-playlist", "yes")
 
 	// Demuxer buffering for network resilience
-	inst.SetOption("demuxer-thread", "yes")
-	inst.SetOption("demuxer-max-bytes", "64MiB")
-	inst.SetOption("demuxer-max-back-bytes", "32MiB")
-	inst.SetOption("cache-pause-initial", "no")
-	inst.SetOption("cache-pause-wait", "1")
-	inst.SetOption("network-timeout", "30")
+	setOption("demuxer-thread", "yes")
+	setOption("demuxer-max-bytes", "64MiB")
+	setOption("demuxer-max-back-bytes", "32MiB")
+	setOption("cache-pause-initial", "no")
+	setOption("cache-pause-wait", "1")
+	setOption("network-timeout", "30")
 
 	// Platform-specific scheduling and audio driver
 	switch runtime.GOOS {
 	case "windows":
 		// Elevate thread priority to defend against foreground window CPU starvation
-		inst.SetOption("priority", "high")
+		setOption("priority", "high")
 	case "linux":
 		// Prefer modern PipeWire, fallback to PulseAudio and ALSA
-		inst.SetOption("ao", "pipewire,pulse,alsa")
+		setOption("ao", "pipewire,pulse,alsa")
 	}
 
-	if len(opts) > 0 {
-		for k, v := range opts[0] {
-			inst.SetOption(k, v)
-		}
+	for k, v := range options {
+		setOption(k, v)
 	}
 
-	if code := mpvLib.initialize(handle); code < 0 {
-		mpvLib.terminateDestroy(handle)
-		return nil, fmt.Errorf("mpv: initialize failed with error code %d", code)
+	if code := library.initialize(handle); code < 0 {
+		library.terminateDestroy(handle)
+		return 0, fmt.Errorf("mpv: initialize failed with error code %d", code)
 	}
 
-	return inst, nil
+	return handle, nil
 }
 
 // Close destroys the MPV instance.

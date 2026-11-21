@@ -20,3 +20,7 @@ macOS 产物是含 `.app` 的 ZIP，Linux 构建省去 Developer ID 签名及 Ap
 ## 稳定版
 
 提交源码及版本，推送稳定版的 `v*` 标签。GitHub Actions 在 Ubuntu 上构建全部六个目标，使用 `MYGO_UPDATER_PRIVATE_KEY` 签名更新清单，上传完成后发布为最新稳定版。macOS 构建使用包含 `.app` 的归档。
+
+## MPV 解码组件
+
+运行 **MPV components** workflow，输入组件版本。Ubuntu runner 生成六个独立 ZIP，使用 `MPV_RELEASE_SIGNING_KEY` 签名索引，然后更新 `mpv-components-v1`。宿主固定信任该签名密钥对应的公钥。发布 Alpha 前，可运行 `LIVE_MPV=1 go test ./internal/player/mpv -run TestLiveMPVComponent -v` 来验证当前官方包的下载、解码播放、停用和重启清理。
