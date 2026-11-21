@@ -18,6 +18,7 @@ for arch in amd64 arm64; do
   mac="$slug-$version-darwin-$arch.zip"
   dmg="$slug-$version-$arch.dmg"
   deb="${slug}_${version/-/\~}_${arch}.deb"
+  published_deb="${deb/\~/.}"
   windows="$slug-setup-$version-$arch.exe"
   linux="$slug-$version-linux-$arch.tar.gz"
   (
@@ -27,8 +28,8 @@ for arch in amd64 arm64; do
   )
   cp "$build/windows-$arch/$windows" "$output/"
   cp "$build/linux-$arch/$linux" "$output/"
-  cp "$build/linux-$arch/$deb" "$output/"
-  assets+=("$mac" "$dmg" "$windows" "$linux" "$deb")
+  cp "$build/linux-$arch/$deb" "$output/$published_deb"
+  assets+=("$mac" "$dmg" "$windows" "$linux" "$published_deb")
 done
 (
   cd "$output"

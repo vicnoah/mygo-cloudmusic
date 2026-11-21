@@ -73,12 +73,25 @@ jobs:
         working-directory: release-source
         run: |
           test "$RELEASE_TAG" = "v$(jq -er .version mygo.json)"
-          GOWORK=off go tool mygo build -skip-dmg -skip-notarize -o "$RUNNER_TEMP/linux" -platform linux/amd64,linux/arm64
+          version=${RELEASE_TAG#v}
+          published_version=${version/-/.}
+          if gh release download "$RELEASE_TAG" -p "wagyu-music_${published_version}_amd64.deb" \
+            -p "wagyu-music_${published_version}_arm64.deb" -D "$RUNNER_TEMP/installers" \
+            && test -f "$RUNNER_TEMP/installers/wagyu-music_${published_version}_amd64.deb" \
+            && test -f "$RUNNER_TEMP/installers/wagyu-music_${published_version}_arm64.deb"; then
+            echo "Reusing both DEBs already uploaded to this release."
+          else
+            GOWORK=off go tool mygo build -skip-dmg -skip-notarize -o "$RUNNER_TEMP/linux" -platform linux/amd64,linux/arm64
+            for arch in amd64 arm64; do
+              deb=("$RUNNER_TEMP/linux/linux-$arch/"*.deb)
+              test "${#deb[@]}" = 1
+              cp "${deb[0]}" "$RUNNER_TEMP/installers/wagyu-music_${published_version}_$arch.deb"
+            done
+          fi
           for arch in amd64 arm64; do
-            deb=("$RUNNER_TEMP/linux/linux-$arch/"*.deb)
-            test "${#deb[@]}" = 1
-            test "$(dpkg-deb -f "${deb[0]}" Architecture)" = "$arch"
-            cp "${deb[0]}" "$RUNNER_TEMP/installers/"
+            deb="$RUNNER_TEMP/installers/wagyu-music_${published_version}_$arch.deb"
+            test "$(dpkg-deb -f "$deb" Architecture)" = "$arch"
+            test "$(dpkg-deb -f "$deb" Version)" = "${version/-/\~}"
           done
       - name: Upload the installers and extend the release checksums
         run: bash scripts/add-installers-to-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/installers/"*
