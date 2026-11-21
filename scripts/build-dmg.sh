@@ -16,7 +16,7 @@ cp -a -- "$app" "$work/source/"
 ln -s /Applications "$work/source/Applications"
 size=$(du -sm --apparent-size "$work/source" | cut -f1)
 truncate -s "$((size + 32))M" "$work/volume.hfs"
-mkfs.hfsplus -s -v "$volume" "$work/volume.hfs"
+mkfs.hfsplus -v "$volume" "$work/volume.hfs"
 hfsplus --symlinks clone_link --special-modes no "$work/volume.hfs" addall "$work/source"
 fsck.hfsplus -fn "$work/volume.hfs"
 dmg -c zlib build "$work/volume.hfs" "$work/image.dmg" > "$work/dmg.log" || {
