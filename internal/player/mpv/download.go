@@ -12,12 +12,14 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"waygu-music/internal/githubdownload"
 )
 
 var (
 	baseDownloadURL = "https://github.com/vicnoah/mygo-cloudmusic/releases/download/mpv-components-v1/"
 	releaseKey, _   = base64.StdEncoding.DecodeString("rTpebkc591D+UvB6e7hP/WigaCvcqExcyG7m5PREahM=")
-	httpClient      = &http.Client{Timeout: 5 * time.Minute}
+	httpClient      = githubdownload.Client()
 )
 
 // Download validates an official component in a staging directory before replacing the active record.
@@ -90,53 +92,43 @@ func Download(ctx context.Context, onProgress func(done, total int64)) error {
 }
 
 func fetchRelease(ctx context.Context) (releaseIndex, error) {
-	body, err := openDownload(ctx, "index.json")
-	if err != nil {
-		return releaseIndex{}, err
-	}
-	defer body.Close()
-	raw, err := io.ReadAll(io.LimitReader(body, maxManifestSize+1))
-	if err != nil {
-		return releaseIndex{}, err
-	}
-	if len(raw) > maxManifestSize {
-		return releaseIndex{}, errors.New("mpv: oversized release index")
-	}
-	return parseRelease(raw, releaseKey)
+	var index releaseIndex
+	err := githubdownload.Try(ctx, httpClient, baseDownloadURL+"index.json", func(resp *http.Response) error {
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestSize+1))
+		if err != nil {
+			return err
+		}
+		if len(raw) > maxManifestSize {
+			return errors.New("mpv: oversized release index")
+		}
+		index, err = parseRelease(raw, releaseKey)
+		return err
+	})
+	return index, err
 }
 
 func fetchArchive(ctx context.Context, asset releaseAsset, file *os.File, onProgress func(done, total int64)) error {
-	body, err := openDownload(ctx, asset.Archive)
-	if err != nil {
-		return err
-	}
-	defer body.Close()
-	hash := sha256.New()
-	progress := &progressReader{r: io.LimitReader(body, asset.Size+1), total: asset.Size, onProgress: onProgress}
-	size, err := io.Copy(io.MultiWriter(file, hash), progress)
-	if err != nil {
-		return fmt.Errorf("mpv: download %s: %w", asset.Archive, err)
-	}
-	if size != asset.Size || hex.EncodeToString(hash.Sum(nil)) != asset.SHA256 {
-		return errors.New("mpv: download size or checksum mismatch")
-	}
-	return nil
-}
-
-func openDownload(ctx context.Context, name string) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseDownloadURL+name, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("mpv: download %s: %w", name, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("mpv: download %s: HTTP %s", name, resp.Status)
-	}
-	return resp.Body, nil
+	return githubdownload.Try(ctx, httpClient, baseDownloadURL+asset.Archive, func(resp *http.Response) error {
+		if err := file.Truncate(0); err != nil {
+			return err
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		if onProgress != nil {
+			onProgress(0, asset.Size)
+		}
+		hash := sha256.New()
+		progress := &progressReader{r: io.LimitReader(resp.Body, asset.Size+1), total: asset.Size, onProgress: onProgress}
+		size, err := io.Copy(io.MultiWriter(file, hash), progress)
+		if err != nil {
+			return err
+		}
+		if size != asset.Size || hex.EncodeToString(hash.Sum(nil)) != asset.SHA256 {
+			return errors.New("mpv: download size or checksum mismatch")
+		}
+		return nil
+	})
 }
 
 // Delete deactivates the component immediately and leaves an in-use directory for startup cleanup.

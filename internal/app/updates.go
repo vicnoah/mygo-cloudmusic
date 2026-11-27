@@ -4,6 +4,8 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/updater"
 	"github.com/egoist/mygo/plugins/updater/native"
+
+	"waygu-music/internal/githubdownload"
 )
 
 // The update plugin's check and preferences, which tests swap: they don't
@@ -21,6 +23,7 @@ var (
 // and then once a day, and offers it in an update window of native UI, in
 // Chinese. It must run before App.Run.
 func (a *app) useUpdater() {
+	mygo.Updater.SetSource(&githubUpdateSource{client: githubdownload.Client(), key: updateKey})
 	mygo.Use(native.New(updater.Options{Language: "zh-Hans"}))
 	a.updates = true
 	// A check or an answer in the update window changes what the settings
