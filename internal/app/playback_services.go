@@ -227,3 +227,9 @@ func (p playbackContinuity) OpenAudio() (pluginapi.Audio, error) {
 }
 
 var _ pluginapi.PlaybackContinuity = playbackContinuity{}
+
+func (h platformHost) AudioPreferencesChanged(_ pluginapi.AudioPreferences) {
+	if h.canWrite() && h.a.pl != nil {
+		h.a.pl.RefreshAudioPreferences()
+	}
+}

@@ -103,8 +103,9 @@ type Player struct {
 
 	// rgDB is the replaygain preamp last set on mpvOut, and rgSet whether
 	// one was: changing the volume need not set it again.
-	rgDB  float64
-	rgSet bool
+	rgDB   float64
+	rgMode string
+	rgSet  bool
 
 	// pending holds a seek asked for while the track loads.
 	pending time.Duration
@@ -782,11 +783,15 @@ func (p *Player) SetVolume(v float64) {
 	p.applyGain()
 }
 
+// RefreshAudioPreferences applies a plugin's changed settings to the current song.
+func (p *Player) RefreshAudioPreferences() { p.applyGain() }
+
 // applyGain sets the volume of what plays: the listener's, which the ear
 // hears in powers, and the track's gain, if normalizing.
 func (p *Player) applyGain() {
 	g := p.volume * p.volume
-	normalize := p.playbackPreferences(p.track).Normalize
+	prefs := p.playbackPreferences(p.track)
+	normalize := prefs.Normalize
 	if normalize {
 		g *= p.gain
 	}
@@ -798,9 +803,19 @@ func (p *Player) applyGain() {
 		}
 		// Setting replaygain is not free, and a volume change keeps it:
 		// set it only when the track or the normalization changed it.
-		if !p.rgSet || p.rgDB != db {
-			p.mpvOut.SetReplayGainPreamp(db)
-			p.rgDB, p.rgSet = db, true
+		mode := prefs.ReplayGainMode
+		if mode == "" {
+			mode = p.mpvCfg.ReplayGain
+		}
+		if mode == "" {
+			mode = "no"
+		}
+		if db != 0 && mode == "no" {
+			mode = "track"
+		}
+		if !p.rgSet || p.rgDB != db || p.rgMode != mode {
+			p.mpvOut.SetReplayGain(mode, db)
+			p.rgDB, p.rgMode, p.rgSet = db, mode, true
 		}
 	}
 }

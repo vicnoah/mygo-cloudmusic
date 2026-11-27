@@ -180,6 +180,17 @@ func (r pluginReverse) apply(in PluginHostCall, reply *PluginHostReply) error {
 		p.CycleRepeat()
 	case "end-radio":
 		p.EndRadio()
+	case protocol.HostAudioPreferences:
+		remote := a.remoteActive()
+		if remote == nil || remote.scope != in.Scope {
+			return platformrpc.Failure{Code: "stale-activation"}
+		}
+		var prefs pluginapi.AudioPreferences
+		if json.Unmarshal(in.Settings, &prefs) != nil || (prefs.ReplayGainMode != "" && prefs.ReplayGainMode != "no" && prefs.ReplayGainMode != "album" && prefs.ReplayGainMode != "track") {
+			return platformrpc.Failure{Code: "invalid-settings"}
+		}
+		remote.info.Preferences = protocol.AudioPreferences(prefs)
+		p.RefreshAudioPreferences()
 	case "volume":
 		h.SetVolume(in.Number)
 	case protocol.HostPatchDesktopPreferences:

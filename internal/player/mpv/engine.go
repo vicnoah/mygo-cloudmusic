@@ -294,34 +294,20 @@ func (e *Engine) SetVolume(vol float64) {
 	}
 }
 
-// SetReplayGainPreamp sets replaygain pre-amplification in dB.
-// If db != 0, enables replaygain normalization with the given gain in dB.
-// If db == 0, falls back to neutral or cfg.ReplayGain.
-func (e *Engine) SetReplayGainPreamp(db float64) {
+// SetReplayGain configures ReplayGain and the optional service-provided gain.
+func (e *Engine) SetReplayGain(mode string, db float64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.inst != nil {
-		if db != 0 {
-			rgMode := e.cfg.ReplayGain
-			if rgMode == "" || rgMode == "no" {
-				rgMode = "track"
-			}
-			e.inst.SetProperty("replaygain", rgMode)
-			e.inst.SetProperty("replaygain-preamp", fmt.Sprintf("%.2f", db))
-			e.inst.SetProperty("replaygain-fallback", fmt.Sprintf("%.2f", db))
-			e.inst.SetProperty("replaygain-clip", "yes")
-		} else {
-			if e.cfg.ReplayGain != "" && e.cfg.ReplayGain != "no" {
-				e.inst.SetProperty("replaygain", e.cfg.ReplayGain)
-				e.inst.SetProperty("replaygain-preamp", "0")
-				e.inst.SetProperty("replaygain-fallback", "0")
-			} else {
-				e.inst.SetProperty("replaygain", "no")
-				e.inst.SetProperty("replaygain-preamp", "0")
-				e.inst.SetProperty("replaygain-fallback", "0")
-			}
-		}
+	if e.inst == nil {
+		return
 	}
+	if mode != "album" && mode != "track" {
+		mode = "no"
+	}
+	e.inst.SetProperty("replaygain", mode)
+	e.inst.SetProperty("replaygain-preamp", fmt.Sprintf("%.2f", db))
+	e.inst.SetProperty("replaygain-fallback", fmt.Sprintf("%.2f", db))
+	e.inst.SetProperty("replaygain-clip", "yes")
 }
 
 // SetEqualizer configures and applies the graphic equalizer filter.
